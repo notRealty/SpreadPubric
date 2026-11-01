@@ -50,6 +50,7 @@ footer{display:flex;align-items:stretch;border-top:1px solid var(--line);backgro
 #tabs{display:flex;overflow-x:auto;flex:0 1 auto}
 .tab{padding:5px 14px;border-right:1px solid var(--line);cursor:pointer;white-space:nowrap;color:var(--muted)}
 .tab.active{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:inset 0 2px 0 var(--accent)}
+.tab .tabEdit{font:inherit;font-weight:normal;margin:-2px -8px;padding:1px 4px;max-width:24em;border:1px solid var(--sel);border-radius:3px;background:var(--bg);color:var(--fg);outline:none}
 #addSheet{border:0;border-right:1px solid var(--line);border-radius:0;background:transparent;padding:0 12px}
 #status{flex:1;padding:5px 10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
 #status.warn{color:var(--stale)}
@@ -71,6 +72,28 @@ dialog input,dialog select{font:inherit;padding:4px 6px;border:1px solid var(--l
 dialog .hint{margin:0;color:var(--muted);font-size:12px}
 dialog .err{margin:0;color:var(--err);font-size:12px;min-height:1em}
 dialog .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+/* スマートフォン・タブレット */
+body{height:100dvh;touch-action:manipulation}
+.touch-only{display:none}
+body.touch .touch-only{display:inline-block}
+button.on{background:var(--selbg);border-color:var(--sel);color:var(--fg)}
+body.touch{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+body.touch input{-webkit-user-select:text;user-select:text}
+body.touch .obj.sel{touch-action:none}
+body.touch .obj .handle{width:22px;height:22px;right:-11px;bottom:-11px;border-radius:50%}
+body.touch #menu button{padding:10px 12px}
+body.touch .tab{padding:8px 16px}
+/* iPhone は 16px 未満の入力欄にフォーカスすると画面を拡大してしまう */
+body.touch #editor,body.touch #finput,body.touch dialog input,body.touch dialog select,body.touch .tab .tabEdit{font-size:16px}
+@media (max-width:700px){
+  header{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  header button{flex:none;padding:6px 10px}
+  #fname{display:none}
+  #addr{width:4.5em}
+  #fx{display:none}
+  #agg{display:none}
+  dialog label{grid-template-columns:5.5em 1fr}
+}
 </style>
 </head>
 <body>
@@ -85,12 +108,13 @@ dialog .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
   <button id="bUndo" title="Ctrl+Z">元に戻す</button>
   <button id="bRedo" title="Ctrl+Y">やり直し</button>
   <span class="sep"></span>
+  <button id="bRange" class="touch-only" title="タップしたセルまで選択範囲を広げる">範囲選択</button>
   <button id="bSum" title="オートSUM（Alt+=）">Σ 合計</button>
   <button id="bChart" title="選択範囲からグラフを作成">グラフ</button>
   <button id="bImage" title="画像を挿入">画像</button>
   <button id="bCalc" title="F9：すべての数式を再計算">再計算</button>
   <span id="fname"></span>
-  <input type="file" id="file" class="hidden-input" accept=".xlsx,.xlsm,.xls,.csv,.ods">
+  <input type="file" id="file" class="hidden-input" accept=".xlsx,.xlsm,.xls,.csv,.ods,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv,application/vnd.oasis.opendocument.spreadsheet">
   <input type="file" id="imgFile" class="hidden-input" accept="image/*">
 </header>
 <div id="fbar">
@@ -888,6 +912,29 @@ function adjustRefs(f, ctxSheet, target, axis, k, n){
   });
 }
 
+// シート名の変更に合わせて、数式中の「シート名!」を書き換える
+const BARE_SHEET = /^[A-Za-z_぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ][\w.぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]*$/;
+const sheetPrefix = n => (BARE_SHEET.test(n) && !/^[A-Za-z]{1,3}\d+$/.test(n) && !/^R\d*C?\d*$/i.test(n) && !/^(TRUE|FALSE)$/i.test(n) ? n : "'" + n.replace(/'/g, "''") + "'") + '!';
+function renameSheetRefs(f, from, to){
+  const lo = from.toLowerCase();
+  let out = '', i = 0;
+  while (i < f.length){
+    if (f[i] === '"'){
+      let j = i + 1;
+      while (j < f.length && !(f[j] === '"' && f[j + 1] !== '"')) j += f[j] === '"' ? 2 : 1;
+      out += f.slice(i, j + 1); i = j + 1; continue;
+    }
+    const m = (i === 0 || !/[\w.À-￿]/.test(f[i - 1])) && RE_SHEET.exec(f.slice(i));
+    if (m){
+      const sn = m[1] != null ? m[1].replace(/''/g, "'") : m[2];
+      out += sn.toLowerCase() === lo ? sheetPrefix(to) : m[0];
+      i += m[0].length; continue;
+    }
+    out += f[i++];
+  }
+  return out;
+}
+
 function lookup(a, s, vertical){
   const x = V(a[0], s), rg = rangeArg(a[1], s), k = num(V(a[2], s)), approx = a[3] && a[3].k !== 'empty' ? bool(V(a[3], s)) : true, {h, w} = dims(rg);
   const n = vertical ? h : w, width = vertical ? w : h;
@@ -927,6 +974,8 @@ const undoStack = [], redoStack = [];
 let drawings = new Map();  // シート名 → 図形（画像・グラフ）の配列
 let srcPkg = null;         // 開いた xlsx の中身（既存の画像・グラフを保存時に引き継ぐため）
 let clip = null;           // 内部クリップボード
+const touchUI = matchMedia('(pointer: coarse)').matches;  // 主な入力がタッチの端末
+let lastPointer = 'mouse', rangeMode = false;
 const EMU = 9525, DEF_COLW = 72;
 
 const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
@@ -1005,7 +1054,7 @@ function setBook(book, name, handle, pkg){
   if (!wb.SheetNames.length) XLSX.utils.book_append_sheet(wb, {'!ref':'A1'}, 'Sheet1');
   drawings = pkg ? pkg.map : new Map();
   srcPkg = pkg || null;
-  undoStack.length = 0; redoStack.length = 0; astCache.clear(); clip = null;
+  undoStack.length = 0; redoStack.length = 0; astCache.clear(); clip = null; sheetRenames = [];
   calcStats = {count:0, stale:new Set(), unsup:new Set(), circ:false};
   dirty = false; updateTitle();
   cur = null;
@@ -1120,18 +1169,105 @@ function renderTabs(){
   for (const n of wb.SheetNames){
     const d = document.createElement('div');
     d.className = 'tab' + (n === cur ? ' active' : '');
-    d.textContent = n;
+    d.textContent = n; d.dataset.name = n;
+    d.title = 'ダブルクリックで名前を変更';
     if (wb.Workbook && wb.Workbook.Sheets){ const m = wb.Workbook.Sheets.find(x => x.name === n); if (m && m.Hidden) d.style.fontStyle = 'italic'; }
     d.onclick = () => { if (n !== cur){ commitAll(); showSheet(n); } focusGrid(); };
+    d.oncontextmenu = e => { e.preventDefault(); showMenu(e.clientX, e.clientY, [{label:'シート名の変更', fn:() => startRename(n)}]); };
     t.appendChild(d);
   }
 }
+// 1回目のクリックでタブが作り直されるため、ダブルクリックはタブ列でまとめて受ける
+$('#tabs').addEventListener('dblclick', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const tab = e.target.closest('.tab');
+  startRename(tab ? tab.dataset.name : cur);
+});
 function addSheet(){
   commitAll();
   let i = wb.SheetNames.length + 1;
   while (wb.SheetNames.includes('Sheet' + i)) i++;
   XLSX.utils.book_append_sheet(wb, {'!ref':'A1'}, 'Sheet' + i);
   markDirty(); showSheet('Sheet' + i); focusGrid();
+}
+
+/* ---------- シート名の変更 ---------- */
+let sheetRenames = [];  // [旧名, 新名] の履歴。元ファイルのグラフが参照するシート名を保存時に書き換える
+function sheetNameError(name, old){
+  if (!name.trim()) return 'シート名を入力してください';
+  if (name.length > 31) return 'シート名は 31 文字以内にしてください';
+  if (/[:\\\/?*\[\]]/.test(name)) return 'シート名に : \\ / ? * [ ] は使えません';
+  if (/^'|'$/.test(name)) return "シート名の先頭と末尾に ' は使えません";
+  if (name.toLowerCase() === 'history') return '「History」はシート名に使えません';
+  if (wb.SheetNames.some(n => n !== old && n.toLowerCase() === name.toLowerCase())) return `「${name}」というシートはすでにあります`;
+  return null;
+}
+function renameSheet(old, nu){
+  const i = wb.SheetNames.indexOf(old);
+  if (i < 0 || old === nu) return;
+  const fix = f => renameSheetRefs(f, old, nu);
+  wb.SheetNames[i] = nu;
+  wb.Sheets[nu] = wb.Sheets[old]; delete wb.Sheets[old];
+  if (wb.Workbook){
+    const m = wb.Workbook.Sheets && wb.Workbook.Sheets[i];
+    if (m && m.name != null) m.name = nu;
+    for (const d of wb.Workbook.Names || []) if (d.Ref) d.Ref = fix(d.Ref);
+  }
+  // すべてのシートの数式・グラフの参照を新しい名前に
+  for (const sn of wb.SheetNames){
+    const ws = wb.Sheets[sn];
+    for (const a in ws) if (a[0] !== '!' && ws[a].f) ws[a].f = fix(ws[a].f);
+  }
+  for (const l of drawings.values()) for (const o of l){
+    if (o.kind !== 'chart' || !o.spec) continue;
+    eachSpecRef(o.spec, fix, o);
+    if (o.spec.title && o.spec.title.ref) o.spec.title.ref = fix(o.spec.title.ref);
+  }
+  if (drawings.has(old)){ drawings.set(nu, drawings.get(old)); drawings.delete(old); }
+  calcStats.stale = new Set([...calcStats.stale].map(k => k.startsWith(old + '!') ? nu + k.slice(old.length) : k));
+  sheetRenames.push([old, nu]);
+  if (cur === old) cur = nu;
+  astCache.clear();
+  renderTabs(); updateCharts(); markDirty();
+  if (!isMulti()) finput.value = editText(wb.Sheets[cur][enc(sel.r, sel.c)]);
+  setStatus(`シート名を「${old}」から「${nu}」に変更しました`);
+}
+function startRename(n){
+  commitAll();
+  const tab = [...$('#tabs').children].find(d => d.dataset.name === n);
+  if (!tab) return;
+  const inp = document.createElement('input');
+  inp.className = 'tabEdit'; inp.value = n; inp.spellcheck = false; inp.autocomplete = 'off';
+  const fit = () => { inp.style.width = Math.max(6, inp.value.length + 2) + 'em'; };
+  fit();
+  tab.textContent = ''; tab.title = ''; tab.appendChild(inp);
+  let done = false;
+  const finish = (ok, onBlur) => {
+    if (done) return;
+    const v = inp.value;
+    if (ok && v !== n){
+      const err = sheetNameError(v, n);
+      if (err){
+        setStatus(err, true);
+        if (!onBlur){ inp.focus(); inp.select(); return; }
+        done = true; renderTabs(); return;
+      }
+      done = true;
+      renameSheet(n, v);
+      undoStack.push({kind:'rename', from:n, to:v}); redoStack.length = 0;
+    } else { done = true; renderTabs(); }
+    focusGrid();
+  };
+  inp.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter'){ e.preventDefault(); finish(true, false); }
+    else if (e.key === 'Escape'){ e.preventDefault(); finish(false, false); }
+  });
+  inp.addEventListener('input', fit);
+  inp.addEventListener('blur', () => finish(true, true));
+  for (const ev of ['click', 'mousedown', 'dblclick']) inp.addEventListener(ev, e => e.stopPropagation());
+  setTimeout(() => { inp.focus(); inp.select(); });
 }
 
 /* ---------- 選択 ---------- */
@@ -1214,7 +1350,11 @@ function placeEditor(){
   editor.style.width = editing ? Math.max(el.offsetWidth, Math.min(600, editor.value.length * 8 + 16)) + 'px' : el.offsetWidth + 'px';
   editor.style.height = el.offsetHeight + 'px';
 }
-function focusGrid(){ editor.focus({preventScroll:true}); }
+// スマートフォン・タブレットでは、編集中以外は入力欄にフォーカスしない（ソフトウェアキーボードが出続けるため）
+function focusGrid(){
+  if (touchUI && !editing){ if (document.activeElement === editor) editor.blur(); return; }
+  editor.focus({preventScroll:true});
+}
 function startEdit(mode, text){
   if (isMulti()) select(sel.r, sel.c);
   editing = mode;
@@ -1322,11 +1462,15 @@ function withSnap(withCells, fn){
 }
 function undo(){
   commitAll(); const e = undoStack.pop(); if (!e) return; redoStack.push(e);
-  if (e.kind === 'cells') applyOps([...e.ops].reverse(), 'old'); else restoreState(e.before);
+  if (e.kind === 'cells') applyOps([...e.ops].reverse(), 'old');
+  else if (e.kind === 'rename') renameSheet(e.to, e.from);
+  else restoreState(e.before);
 }
 function redo(){
   commitAll(); const e = redoStack.pop(); if (!e) return; undoStack.push(e);
-  if (e.kind === 'cells') applyOps(e.ops, 'nu'); else restoreState(e.after);
+  if (e.kind === 'cells') applyOps(e.ops, 'nu');
+  else if (e.kind === 'rename') renameSheet(e.from, e.to);
+  else restoreState(e.after);
 }
 function recalcAll(){
   commitAll();
@@ -1524,25 +1668,40 @@ function deleteObj(id){
   withSnap(false, () => { const l = objsOf(cur), i = l.findIndex(o => o.id === id); if (i >= 0) l.splice(i, 1); });
   selObjId = null; renderObjs();
 }
-objLayer.addEventListener('mousedown', e => {
+objLayer.addEventListener('pointerdown', e => {
   const div = e.target.closest('.obj'); if (!div || e.button !== 0) return;
-  e.preventDefault(); e.stopPropagation();
+  e.stopPropagation();
   hideMenu(); commitAll();
+  // タッチでは、まだ選んでいない図形は選ぶだけにする（その上からでも画面をスクロールできるように）
+  const first = e.pointerType === 'touch' && selObjId !== div.dataset.id;
   selectObj(div.dataset.id);
+  focusGrid();
+  if (first) return;
+  e.preventDefault();
   const o = objsOf(cur).find(x => x.id === div.dataset.id);
   const r = {x:div.offsetLeft, y:div.offsetTop, w:div.offsetWidth, h:div.offsetHeight};
   drag = {o, div, mode: e.target.classList.contains('handle') ? 'resize' : 'move', sx:e.clientX, sy:e.clientY, r, aspect:r.w / r.h, moved:false};
-  focusGrid();
 });
+function editChart(o){
+  if (o.source) openChartDialog(o);
+  else setStatus('Excel で作成されたグラフは、移動・サイズ変更・削除のみできます（保存時は元の書式のまま残ります）', true);
+}
 objLayer.addEventListener('dblclick', e => {
   const div = e.target.closest('.obj'); if (!div) return;
   const o = objsOf(cur).find(x => x.id === div.dataset.id);
-  if (o && o.kind === 'chart'){
-    if (o.source) openChartDialog(o);
-    else setStatus('Excel で作成されたグラフは、移動・サイズ変更・削除のみできます（保存時は元の書式のまま残ります）', true);
-  }
+  if (o && o.kind === 'chart') editChart(o);
 });
-window.addEventListener('mousemove', e => {
+objLayer.addEventListener('contextmenu', e => {
+  const div = e.target.closest('.obj'); if (!div) return;
+  e.preventDefault(); commitAll();
+  const o = objsOf(cur).find(x => x.id === div.dataset.id); if (!o) return;
+  selectObj(o.id);
+  const items = [];
+  if (o.kind === 'chart') items.push({label:'グラフを編集', fn:() => editChart(o)});
+  items.push({label:(o.kind === 'image' ? '画像' : o.kind === 'chart' ? 'グラフ' : '図形') + 'を削除', fn:() => deleteObj(o.id)});
+  showMenu(e.clientX, e.clientY, items);
+});
+window.addEventListener('pointermove', e => {
   if (!drag) return;
   const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy, st = drag.div.style;
   if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
@@ -1555,7 +1714,7 @@ window.addEventListener('mousemove', e => {
     st.width = w + 'px'; st.height = h + 'px';
   }
 });
-window.addEventListener('mouseup', () => {
+const endDrag = () => {
   if (!drag) return;
   const d = drag; drag = null;
   if (!d.moved) return;
@@ -1566,7 +1725,9 @@ window.addEventListener('mouseup', () => {
     d.o.size = {w, h}; d.o.moved = true;
   });
   placeObj(d.o);
-});
+};
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
 
 async function insertImage(file){
   commitAll();
@@ -1591,7 +1752,7 @@ async function insertImage(file){
   const o = {id:newId(), kind:'image', data, mime, ext:extOf[mime], url, from, to:pxToAnchor(p.x + w, p.y + h), size:{w, h}, name:file.name.replace(/\.[^.]+$/, '') || '図'};
   withSnap(false, () => objsOf(cur).push(o));
   renderObjs(); selectObj(o.id); focusGrid();
-  setStatus('画像を挿入しました（ドラッグで移動、右下の□でサイズ変更、Delete で削除）');
+  setStatus(touchUI ? '画像を挿入しました（ドラッグで移動、右下の○でサイズ変更、長押しで削除）' : '画像を挿入しました（ドラッグで移動、右下の□でサイズ変更、Delete で削除）');
 }
 const loadImage = url => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
 
@@ -1779,7 +1940,7 @@ $('#chartForm').addEventListener('submit', e => {
     const o = {id:newId(), kind:'chart', spec:built.spec, source:built.source, from:pxToAnchor(p.x, p.y), to:pxToAnchor(p.x + 480, p.y + 288), name:'グラフ'};
     withSnap(false, () => objsOf(cur).push(o));
     renderObjs(); selectObj(o.id);
-    setStatus('グラフを作成しました（ダブルクリックで編集、ドラッグで移動、Delete で削除）');
+    setStatus(touchUI ? 'グラフを作成しました（長押しで編集・削除、選んでからドラッグで移動）' : 'グラフを作成しました（ダブルクリックで編集、ドラッグで移動、Delete で削除）');
   }
   focusGrid();
 });
@@ -1825,7 +1986,13 @@ grid.addEventListener('contextmenu', e => {
     {label:`${nc} 列削除`, fn:() => structOp('c', g.s.c, -nc)},
   ];
   const items = inHead && c >= 0 ? colItems : (!inHead && c < 0 ? rowItems : [...rowItems, ...colItems]);
-  showMenu(e.clientX, e.clientY, [...items, '-',
+  showMenu(e.clientX, e.clientY, [
+    {label:'セルを編集', fn:() => startEdit('edit', editText(wb.Sheets[cur][enc(sel.r, sel.c)]))},
+    {label:'コピー', fn:menuCopy},
+    {label:'切り取り', fn:() => { menuCopy(); clearRange(); }},
+    {label:'貼り付け', fn:menuPaste},
+    {label:'内容を消去', fn:clearRange},
+    '-', ...items, '-',
     {label:'下方向へコピー（Ctrl+D）', fn:() => fill('down')},
     {label:'右方向へコピー（Ctrl+R）', fn:() => fill('right')},
     '-',
@@ -1833,6 +2000,18 @@ grid.addEventListener('contextmenu', e => {
     {label:'画像を挿入', fn:() => $('#imgFile').click()},
   ]);
 });
+// メニューからのコピー・貼り付け（キーボードのないスマートフォン向け）。OS のクリップボードが使えないときは内部の控えを使う
+function menuCopy(){
+  const t = copyRange();
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).catch(() => {});
+  setStatus('コピーしました');
+}
+async function menuPaste(){
+  let t = null;
+  try { if (navigator.clipboard && navigator.clipboard.readText) t = await navigator.clipboard.readText(); } catch {}
+  if (t == null || t === '') t = clip ? clip.tsv : '';
+  if (t) pasteText(t); else setStatus('貼り付ける内容がありません', true);
+}
 function selectCols(c1, c2){ select(0, c1); corner = {r:nRows - 1, c:c2}; positionRangeBox(); updateAgg(); }
 function selectRows(r1, r2){ select(r1, 0); corner = {r:r2, c:nCols - 1}; positionRangeBox(); updateAgg(); }
 
@@ -1930,10 +2109,15 @@ grid.addEventListener('mousedown', e => {
   commitAll(); selectObj(null); hideMenu();
   const inHead = cell.parentElement.parentElement.tagName === 'THEAD';
   const r = inHead ? -1 : cell.parentElement.rowIndex - 1, c = cell.cellIndex - 1;
+  const ext = e.shiftKey || rangeMode;
+  // タッチでは、選択中のセルをもう一度タップすると編集を始める
+  if (lastPointer === 'touch' && !ext && !inHead && c >= 0 && !isMulti() && r === sel.r && c === sel.c){
+    startEdit('edit', editText(wb.Sheets[cur][enc(r, c)])); return;
+  }
   if (inHead && c < 0){ const rg = sheetRange(cur); select(0, 0); extendTo(rg.e.r, rg.e.c); }
-  else if (inHead) e.shiftKey ? (corner = {r:nRows - 1, c}, positionRangeBox(), updateAgg()) : selectCols(c, c);
-  else if (c < 0) e.shiftKey ? (corner = {r, c:nCols - 1}, positionRangeBox(), updateAgg()) : selectRows(r, r);
-  else { if (e.shiftKey) extendTo(r, c); else select(r, c); selecting = true; }
+  else if (inHead) ext ? (corner = {r:nRows - 1, c}, positionRangeBox(), updateAgg()) : selectCols(c, c);
+  else if (c < 0) ext ? (corner = {r, c:nCols - 1}, positionRangeBox(), updateAgg()) : selectRows(r, r);
+  else { if (ext) extendTo(r, c); else select(r, c); selecting = true; }
   focusGrid();
 });
 grid.addEventListener('mouseover', e => {
@@ -2119,7 +2303,16 @@ async function copyPart(ctx, src){
   const m = /^(.*\/)?([^\/]*?)(\d*)(\.[^.\/]+)$/.exec(src) || [null, dirOf(src), 'part', '', '.bin'];
   const np = freeName(ctx.zip, m[1] || '', m[2] || 'part', m[4]);
   ctx.copied.set(src, np);
-  ctx.zip.file(np, await f.async('uint8array'));
+  if (sheetRenames.length && /\/charts\/[^\/]+\.xml$/i.test(src)){
+    // 元ファイルのグラフの参照式（<c:f>）を、変更後のシート名に書き換える
+    const unX = s => s.replace(/&(lt|gt|quot|apos|amp);/g, (_, k) => ({lt:'<', gt:'>', quot:'"', apos:"'", amp:'&'}[k]));
+    const xml = (await f.async('string')).replace(/(<(?:\w+:)?f>)([^<]*)(<\/(?:\w+:)?f>)/g, (_, a, body, b) => {
+      let s = unX(body);
+      for (const [from, to] of sheetRenames) s = renameSheetRefs(s, from, to);
+      return a + escX(s) + b;
+    });
+    ctx.zip.file(np, xml);
+  } else ctx.zip.file(np, await f.async('uint8array'));
   const ov = srcPkg.ct && ctFind(srcPkg.ct, 'Override', 'PartName', '/' + src);
   if (ov) addOverride(ctx.ct, '/' + np, ov.getAttribute('ContentType'));
   else { const ex = m[4].slice(1), d = srcPkg.ct && ctFind(srcPkg.ct, 'Default', 'Extension', ex); if (d) ensureDefault(ctx.ct, ex, d.getAttribute('ContentType')); else if (MIME[ex]) ensureDefault(ctx.ct, ex, MIME[ex]); }
@@ -2259,7 +2452,8 @@ async function loadFile(f, handle){
     const data = new Uint8Array(await f.arrayBuffer());
     const book = XLSX.read(data, {type:'array', cellFormula:true, cellNF:true, cellStyles:true, cellDates:false, bookVBA:true, codepage:932});
     let pkg = null;
-    if (data[0] === 0x50 && data[1] === 0x4B && /\.(xlsx|xlsm)$/i.test(f.name)){
+    // スマートフォンでは拡張子のないファイル名で渡されることがあるため、中身（zip）で判定する
+    if (data[0] === 0x50 && data[1] === 0x4B && !/\.ods$/i.test(f.name)){
       try { pkg = await loadPackage(data); } catch (e){ console.warn('画像・グラフを読み込めませんでした', e); }
     }
     setBook(book, f.name, /\.(xlsx|xlsm|xls)$/i.test(f.name) ? handle : null, pkg);
@@ -2289,6 +2483,7 @@ async function buildFile(type){
   const data = new Uint8Array(XLSX.write(wb, {...writeOpts(type), type:'array'}));
   return type !== 'biff8' && hasObjs() ? await injectDrawings(data) : data;
 }
+const SAVE_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const SAVE_TYPES = {
   xlsx: {description:'Excel ブック', accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}},
   xls: {description:'Excel 97-2003 ブック', accept:{'application/vnd.ms-excel':['.xls']}},
@@ -2310,7 +2505,8 @@ async function saveAs(ext){
   try {
     const data = await buildFile(bookTypeFor(name));
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([data], {type:'application/octet-stream'}));
+    // 正しい MIME タイプにしておくと、iPhone / Android が Excel ファイルとして扱う
+    a.href = URL.createObjectURL(new Blob([data], {type: ext === 'xls' ? 'application/vnd.ms-excel' : SAVE_MIME}));
     a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     dirty = false; updateTitle();
@@ -2376,8 +2572,42 @@ window.addEventListener('drop', async e => {
   if (confirmDiscard()) loadFile(f, handle && handle.kind === 'file' ? handle : null);
 });
 
+/* ---------- タッチ操作：長押しでメニュー ---------- */
+// iPhone は長押しで contextmenu が起きず、Android は起きるので、どちらも自前の長押し判定にそろえる
+let lpTimer = null, lpStart = null, lpFired = false;
+const lpIgnore = t => !!(t.closest && t.closest('input, textarea, select, dialog, #menu'));
+window.addEventListener('pointerdown', e => {
+  lastPointer = e.pointerType;
+  clearTimeout(lpTimer); lpTimer = null; lpFired = false;
+  if (e.pointerType !== 'touch' || lpIgnore(e.target)) return;
+  const target = e.target, x = e.clientX, y = e.clientY;
+  lpStart = {x, y};
+  lpTimer = setTimeout(() => {
+    lpTimer = null; lpFired = true;
+    if (drag && drag.moved) return;
+    drag = null;
+    target.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:x, clientY:y}));
+  }, 500);
+}, true);
+window.addEventListener('pointermove', e => {
+  if (lpTimer && Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > 10){ clearTimeout(lpTimer); lpTimer = null; }
+}, true);
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, () => { clearTimeout(lpTimer); lpTimer = null; }, true);
+// 長押しのあとの指を離す操作で、タップ扱い（メニューが閉じる・セルが変わる）にならないようにする
+window.addEventListener('touchend', e => { if (lpFired){ lpFired = false; if (e.cancelable) e.preventDefault(); } }, {capture:true, passive:false});
+window.addEventListener('contextmenu', e => {
+  if (e.isTrusted && lastPointer === 'touch' && !lpIgnore(e.target)){ e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
+$('#bRange').onclick = () => {
+  rangeMode = !rangeMode;
+  $('#bRange').classList.toggle('on', rangeMode);
+  setStatus(rangeMode ? '範囲選択：タップしたセルまで選択範囲を広げます（もう一度押すと解除）' : '範囲選択を解除しました');
+};
+if (touchUI) document.body.classList.add('touch');
+
 setBook(emptyBook(), 'Book1.xlsx', null, null);
-setStatus('「開く」またはドラッグ＆ドロップで xlsx / xls を読み込めます。画像はドロップ・貼り付けでも挿入できます');
+setStatus(touchUI ? '「開く」で xlsx / xls を選びます。タップで選択、もう一度タップで編集、長押しでメニュー'
+  : '「開く」またはドラッグ＆ドロップで xlsx / xls を読み込めます。画像はドロップ・貼り付けでも挿入できます');
 focusGrid();
 </script>
 </body>
