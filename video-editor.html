@@ -1,0 +1,1154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>動画 ローカルエディタ</title>
+<!--
+  動画 ローカルエディタ
+  - ブラウザのみで動作（ネットワーク通信なし・外部ライブラリなし）
+  - 動画・音声・画像を読み込み、タイムライン上でカット・分割・並べ替え・トリミング
+  - 速度・音量・フェード・クロスフェード・ズーム・回転・色調整・テキスト（テロップ）・BGM
+  - 描画は <canvas>、音声は Web Audio API でミックス
+  - 書き出しは canvas.captureStream + MediaRecorder（MP4 / WebM。ブラウザが対応する形式）
+  - プロジェクトは JSON で保存（素材ファイル自体は含まない。開き直すと名前で再リンク）
+-->
+<style>
+:root{--bg:#fff;--fg:#1f2328;--muted:#6b7280;--line:#d8dde3;--head:#f3f4f6;--sel:#2563eb;--selbg:#e3edff;--tool:#f8fafc;--err:#b91c1c;--accent:#7c3aed;--canvas:#e9ecef;--shadow:0 6px 24px rgba(0,0,0,.18);--cv:#3b6fd8;--ct:#c27803;--ca:#0f8a68;--trk:#f1f3f6}
+@media (prefers-color-scheme: dark){:root{--bg:#1b1d21;--fg:#e6e6e6;--muted:#9aa0a6;--line:#363b42;--head:#25282d;--sel:#60a5fa;--selbg:#1e3350;--tool:#202328;--err:#f87171;--accent:#8b5cf6;--canvas:#111316;--shadow:0 6px 24px rgba(0,0,0,.5);--cv:#2f5fc0;--ct:#a86a06;--ca:#0c7357;--trk:#17191c}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,"Segoe UI","Hiragino Sans","Yu Gothic UI",Meiryo,sans-serif;overflow:hidden}
+header{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;padding:6px 8px;background:var(--tool);border-bottom:1px solid var(--line)}
+header .sep{width:1px;height:20px;background:var(--line);margin:0 2px}
+header label{display:inline-flex;gap:4px;align-items:center;color:var(--muted)}
+button,select,input,textarea{font:inherit;color:var(--fg)}
+button{padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:var(--bg);cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--sel)}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.ic{min-width:30px;padding:4px 7px}
+select,input[type=number],input[type=text],textarea{padding:3px 5px;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
+input[type=color]{width:34px;height:24px;padding:0 2px;border:1px solid var(--line);border-radius:4px;background:var(--bg);cursor:pointer}
+input[type=range]{accent-color:var(--accent)}
+main{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr) 290px}
+#lib,#props{overflow:auto;background:var(--tool);min-height:0}
+#lib{border-right:1px solid var(--line)}
+#props{border-left:1px solid var(--line)}
+.ph{position:sticky;top:0;z-index:1;padding:6px 10px;font-weight:600;background:var(--head);border-bottom:1px solid var(--line)}
+#libList{padding:6px;display:flex;flex-direction:column;gap:6px}
+.empty{color:var(--muted);padding:14px 8px;text-align:center;line-height:1.7}
+.mi{display:grid;grid-template-columns:64px 1fr;gap:6px;padding:5px;border:1px solid var(--line);border-radius:6px;background:var(--bg);cursor:grab}
+.mi.missing{border-color:var(--err)}
+.mi .th{width:64px;height:40px;border-radius:4px;background:#000 center/cover no-repeat;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px}
+.mi .nm{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mi .sub{font-size:11px;color:var(--muted)}
+.mi.missing .sub{color:var(--err)}
+.mi .acts{grid-column:1/3;display:flex;gap:4px;flex-wrap:wrap}
+.mi .acts button{padding:1px 7px;font-size:12px}
+#stage{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--canvas)}
+#view{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#cv{display:block;background:#000;box-shadow:var(--shadow);touch-action:none}
+#selBox{position:absolute;border:1.5px dashed #facc15;pointer-events:none;display:none}
+#emptyHint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:15px;pointer-events:none;text-align:center;line-height:1.8}
+#transport{display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 8px;background:var(--tool);border-top:1px solid var(--line)}
+#tc{font-variant-numeric:tabular-nums;min-width:170px;text-align:center}
+#transport label{display:inline-flex;gap:4px;align-items:center;color:var(--muted)}
+#rMaster{width:80px}
+#split{height:5px;cursor:row-resize;background:var(--line)}
+#tlBar{display:flex;gap:8px;align-items:center;padding:4px 8px;background:var(--tool);border-bottom:1px solid var(--line);flex-wrap:wrap}
+#tlBar label{display:inline-flex;gap:4px;align-items:center;color:var(--muted)}
+#zoom{width:140px}
+#tlWrap{height:220px;display:flex;overflow-y:auto;overflow-x:hidden;background:var(--trk)}
+#tlLabels{width:70px;flex:none;background:var(--tool);border-right:1px solid var(--line)}
+#tlLabels div{display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px}
+#tl{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;position:relative}
+#tlInner{position:relative;min-height:100%}
+#ruler{position:sticky;left:0;top:0;display:block;height:24px;z-index:3;background:var(--head);border-bottom:1px solid var(--line);cursor:ew-resize}
+.track{position:relative;border-bottom:1px solid var(--line)}
+#trV{height:60px}
+.clip{position:absolute;border-radius:5px;overflow:hidden;cursor:grab;color:#fff;font-size:11px;border:1px solid rgba(0,0,0,.3);user-select:none;touch-action:none}
+.clip.k-clip{background-color:var(--cv);background-repeat:repeat-x;background-size:auto 100%}
+.clip.k-text{background:var(--ct)}
+.clip.k-audio{background:var(--ca)}
+.clip.missing{background:repeating-linear-gradient(45deg,#7f1d1d 0 8px,#991b1b 8px 16px)!important}
+.clip .nm{position:absolute;left:6px;top:2px;right:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none}
+.clip::before,.clip::after{content:"";position:absolute;top:0;bottom:0;width:7px;cursor:ew-resize;z-index:1}
+.clip::before{left:0}.clip::after{right:0}
+.clip:hover::before,.clip:hover::after{background:rgba(255,255,255,.35)}
+.clip.sel{outline:2px solid #facc15;outline-offset:-2px;z-index:2}
+.clip .xf{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,rgba(255,255,255,.6),rgba(255,255,255,0));pointer-events:none}
+.clip canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+#ph{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:#ef4444;z-index:5;pointer-events:none}
+#ph::before{content:"";position:absolute;top:0;left:-5px;border:6px solid transparent;border-top:8px solid #ef4444}
+#insMark{position:absolute;top:24px;height:60px;width:3px;margin-left:-1px;background:#facc15;display:none;z-index:6;pointer-events:none}
+.track.dropok{background:rgba(124,58,237,.12)}
+#propBody{padding-bottom:16px}
+.ptitle{padding:8px 10px 2px}
+.ptitle small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec{margin:10px 10px 2px;padding-top:6px;border-top:1px solid var(--line);font-weight:600;font-size:12px;color:var(--muted)}
+.row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:6px;align-items:center;padding:3px 10px}
+.row>span{font-size:12px}
+.row input[type=number]{width:80px}
+.row textarea{width:100%;resize:vertical}
+.rng{display:flex;gap:6px;align-items:center;min-width:0}
+.rng input[type=range]{flex:1;min-width:0}
+.rng input[type=number]{width:60px}
+.pbtns{display:flex;gap:6px;flex-wrap:wrap;padding:12px 10px 0}
+.help{margin:4px 10px;padding-left:18px;line-height:1.7}
+.keys{margin:4px 10px;border-collapse:collapse;font-size:12px}
+.keys td{padding:2px 6px;border-bottom:1px solid var(--line)}
+.keys td:first-child{white-space:nowrap;color:var(--muted)}
+footer{display:flex;gap:12px;padding:3px 10px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;background:var(--tool)}
+footer #msg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+footer #msg.err{color:var(--err)}
+#drop{position:fixed;inset:0;background:rgba(124,58,237,.12);border:3px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:20px;z-index:50;pointer-events:none}
+#drop.on{display:flex}
+#dlg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:70}
+#dlg.on{display:flex}
+#dlg .box{background:var(--bg);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);width:min(440px,calc(100vw - 32px));padding:14px 6px 14px}
+#dlg h3{margin:0 10px 8px;font-size:15px}
+#dlg .row{grid-template-columns:110px minmax(0,1fr)}
+#dlg .chk{display:flex;gap:6px;align-items:center;padding:6px 10px}
+#dlg .note{margin:6px 10px;color:var(--muted);font-size:12px;line-height:1.6}
+#dlg .btns{display:flex;justify-content:flex-end;gap:6px;padding:10px 10px 0}
+.bar{margin:8px 10px;height:10px;border-radius:5px;background:var(--head);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent)}
+#eTxt{margin:0 10px;color:var(--muted);font-variant-numeric:tabular-nums}
+#holder{position:fixed;left:0;top:0;width:2px;height:2px;overflow:hidden;opacity:0;pointer-events:none}
+@media (max-width:900px){
+  main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(240px,1fr) auto auto;overflow:auto}
+  #lib,#props{border:0;border-top:1px solid var(--line)}
+  #lib{height:150px}#props{height:280px}
+  #lib{order:2}#props{order:3}
+}
+</style>
+</head>
+<body>
+<header>
+  <button id="bOpen" class="primary" title="動画・音声・画像を追加">開く</button>
+  <input type="file" id="fOpen" multiple hidden accept="video/*,audio/*,image/*,.mkv,.mov,.m4v,.m4a,.flac,.opus">
+  <input type="file" id="fRelink" hidden accept="video/*,audio/*,image/*,.mkv,.mov,.m4v,.m4a,.flac,.opus">
+  <button id="bExport" title="動画ファイルに書き出し (Ctrl+E)">書き出し</button>
+  <span class="sep"></span>
+  <button id="bUndo" class="ic" title="元に戻す (Ctrl+Z)">↶</button>
+  <button id="bRedo" class="ic" title="やり直し (Ctrl+Y)">↷</button>
+  <span class="sep"></span>
+  <button id="bSplit" title="再生位置で分割 (S)">✂ 分割</button>
+  <button id="bDup" title="複製 (Ctrl+D)">複製</button>
+  <button id="bDel" title="削除 (Delete)">削除</button>
+  <button id="bText" title="再生位置にテキストを追加 (T)">＋テキスト</button>
+  <button id="bSnap" title="現在のフレームを PNG で保存">静止画保存</button>
+  <span class="sep"></span>
+  <label>サイズ <select id="sRes"></select></label>
+  <label>fps <select id="sFps"><option>24</option><option>25</option><option selected>30</option><option>60</option></select></label>
+  <label>背景 <input type="color" id="cBg" value="#000000"></label>
+  <span class="sep"></span>
+  <button id="bProjSave" title="編集内容を JSON で保存 (Ctrl+S)">プロジェクト保存</button>
+  <button id="bProjOpen">プロジェクトを開く</button>
+  <input type="file" id="fProj" hidden accept=".json,application/json">
+</header>
+<main>
+  <aside id="lib"><div class="ph">素材</div><div id="libList"></div></aside>
+  <section id="stage">
+    <div id="view"><canvas id="cv" width="1280" height="720"></canvas><div id="selBox"></div><div id="emptyHint">「開く」または ドラッグ＆ドロップで<br>動画・音声・画像を追加してください</div></div>
+    <div id="transport">
+      <button id="bHome" class="ic" title="先頭へ (Home)">⏮</button>
+      <button id="bPrev" class="ic" title="前の編集点 (↑)">⇤</button>
+      <button id="bBack" class="ic" title="1 フレーム戻る (←)">◀</button>
+      <button id="bPlay" class="primary" title="再生 / 停止 (Space)" style="min-width:56px">▶</button>
+      <button id="bFwd" class="ic" title="1 フレーム進む (→)">▶</button>
+      <button id="bNext" class="ic" title="次の編集点 (↓)">⇥</button>
+      <button id="bEnd" class="ic" title="末尾へ (End)">⏭</button>
+      <span id="tc">00:00.00 / 00:00.00</span>
+      <label>音量 <input type="range" id="rMaster" min="0" max="1" step="0.01" value="1"></label>
+    </div>
+  </section>
+  <aside id="props"><div class="ph">プロパティ</div><div id="propBody"></div></aside>
+</main>
+<div id="split" title="ドラッグでタイムラインの高さを変更"></div>
+<div id="tlBar">
+  <label>ズーム <input type="range" id="zoom" min="0" max="100" step="1"></label>
+  <button id="bFit">全体表示</button>
+  <label><input type="checkbox" id="cSnapOn" checked> スナップ</label>
+  <span style="color:var(--muted);font-size:12px">クリップの端をドラッグでトリミング／中央をドラッグで移動・並べ替え</span>
+</div>
+<div id="tlWrap">
+  <div id="tlLabels"><div style="height:24px"></div><div id="lV">映像</div><div id="lT">テキスト</div><div id="lA">音声</div></div>
+  <div id="tl"><div id="tlInner"><canvas id="ruler" height="24"></canvas><div id="trV" class="track"></div><div id="trT" class="track"></div><div id="trA" class="track"></div><div id="ph"></div><div id="insMark"></div></div></div>
+</div>
+<footer><span id="msg">動画・音声・画像を開いて編集できます。ファイルは外部に送信されません。</span><span id="info"></span></footer>
+<div id="drop">ここにドロップして素材を追加</div>
+<div id="holder"></div>
+<div id="dlg"><div class="box">
+  <h3>動画の書き出し</h3>
+  <div id="expForm">
+    <div class="row"><span>形式</span><select id="eFmt"></select></div>
+    <div class="row"><span>画質</span><select id="eQ"><option value="2500000">低（2.5 Mbps）</option><option value="5000000">標準（5 Mbps）</option><option value="8000000" selected>高（8 Mbps）</option><option value="16000000">最高（16 Mbps）</option></select></div>
+    <div class="row"><span>ファイル名</span><input id="eName" type="text" value="video"></div>
+    <label class="chk"><input type="checkbox" id="eMute" checked> 書き出し中はスピーカーから音を出さない</label>
+    <p class="note" id="eNote"></p>
+    <div class="btns"><button id="eCancel">キャンセル</button><button id="eStart" class="primary">書き出し開始</button></div>
+  </div>
+  <div id="expRun" hidden>
+    <div class="bar"><i id="eBar"></i></div>
+    <div id="eTxt"></div>
+    <p class="note">完了までこのタブを前面に表示したままにしてください。</p>
+    <div class="btns"><button id="eAbort">中止</button></div>
+  </div>
+</div></div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d');
+const tl=$('tl'),tlIn=$('tlInner'),ruler=$('ruler'),trV=$('trV'),trT=$('trT'),trA=$('trA'),phEl=$('ph'),insMark=$('insMark');
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const pad=n=>String(n).padStart(2,'0');
+const r3=v=>Math.round(v*1000)/1000;
+function fmt(t,frac=true){t=Math.max(0,t||0);const h=Math.floor(t/3600),m=Math.floor(t/60)%60,s=Math.floor(t)%60,cs=Math.floor((t%1)*100+1e-6);return (h?h+':'+pad(m):pad(m))+':'+pad(s)+(frac?'.'+pad(cs):'');}
+let uid=1;const nid=p=>p+(uid++);
+
+// ---------- 状態 ----------
+const S={media:[],clips:[],texts:[],audios:[],set:{w:1280,h:720,fps:30,bg:'#000000',auto:true}};
+let T=0,total=0,mainEnd=0,playing=false,playT0=0,playN0=0,lastNow=0,stallMs=0,dirty=true,sel=null,pps=40,snapOn=true,EXP=null;
+let AC=null,master=null,spk=null,recDest=null,masterVol=1;
+const RT=new Map(); // clip/audio id -> {el,url,gain,want}
+
+const FONTS={gothic:['ゴシック','"Yu Gothic UI","Yu Gothic","Hiragino Sans","Meiryo","Noto Sans JP",sans-serif'],mincho:['明朝','"Yu Mincho","Hiragino Mincho ProN","MS Mincho","Noto Serif JP",serif'],meiryo:['メイリオ','Meiryo,"Hiragino Sans",sans-serif'],maru:['丸ゴシック','"Hiragino Maru Gothic ProN","HG丸ｺﾞｼｯｸM-PRO","Arial Rounded MT Bold",sans-serif'],impact:['Impact','Impact,"Arial Black",sans-serif'],mono:['等幅','"BIZ UDGothic",Consolas,monospace'],hand:['手書き風','"Segoe Print","Comic Sans MS",cursive']};
+const PRESETS={'なし':{br:100,ct:100,sat:100,hue:0,gray:0,sepia:0,blur:0},'モノクロ':{gray:100},'セピア':{sepia:80,sat:90},'ビビッド':{sat:150,ct:115},'レトロ':{sepia:35,ct:90,sat:80,br:105},'ふんわり':{br:112,ct:85,sat:90},'ナイト':{br:80,ct:120,sat:70}};
+const RES=[['auto','自動（最初の素材に合わせる）'],['1920x1080','1920×1080（横 FHD）'],['1280x720','1280×720（横 HD）'],['854x480','854×480（横 SD）'],['1080x1920','1080×1920（縦 FHD）'],['720x1280','720×1280（縦 HD）'],['1080x1080','1080×1080（正方形）'],['3840x2160','3840×2160（4K）']];
+
+function msg(t,err){const m=$('msg');m.textContent=t;m.classList.toggle('err',!!err);}
+const med=id=>S.media.find(m=>m.id===id);
+const arr=k=>k==='clip'?S.clips:k==='text'?S.texts:S.audios;
+const findItem=(k,id)=>arr(k).find(x=>x.id===id);
+const selItem=()=>sel?findItem(sel.kind,sel.id):null;
+
+// ---------- 音声 ----------
+function audioInit(){
+  if(AC) return;
+  AC=new (window.AudioContext||window.webkitAudioContext)();
+  master=AC.createGain();spk=AC.createGain();recDest=AC.createMediaStreamDestination();
+  master.connect(spk);spk.connect(AC.destination);master.connect(recDest);
+  spk.gain.value=masterVol;
+}
+function rt(item){
+  const m=med(item.mid);
+  if(!m||!m.url||m.type==='image') return null;
+  let r=RT.get(item.id);
+  if(r&&r.url===m.url) return r;
+  if(r) dropRt(item.id);
+  audioInit();
+  const el=document.createElement(m.type==='audio'?'audio':'video');
+  el.preload='auto';el.playsInline=true;el.src=m.url;
+  el.addEventListener('seeked',()=>{dirty=true;});
+  el.addEventListener('loadeddata',()=>{dirty=true;});
+  $('holder').append(el);
+  r={el,url:m.url,gain:null,want:null};
+  try{const src=AC.createMediaElementSource(el);r.gain=AC.createGain();r.gain.gain.value=0;src.connect(r.gain);r.gain.connect(master);}catch(e){}
+  RT.set(item.id,r);
+  return r;
+}
+function dropRt(id){const r=RT.get(id);if(!r) return;r.el.pause();r.el.removeAttribute('src');r.el.load();r.el.remove();if(r.gain) r.gain.disconnect();RT.delete(id);}
+function gcRt(){const ids=new Set([...S.clips,...S.audios].map(x=>x.id));for(const id of [...RT.keys()]) if(!ids.has(id)) dropRt(id);}
+
+// ---------- 配置計算 ----------
+const clipDur=c=>Math.max(0.05,(c.out-c.in)/(c.speed||1));
+function layout(){
+  let t=0;
+  S.clips.forEach((c,i)=>{const d=clipDur(c);const x=i?Math.max(0,Math.min(c.xfade||0,d/2,clipDur(S.clips[i-1])/2)):0;c._x=x;c._s=Math.max(0,t-x);c._e=c._s+d;t=c._e;});
+  mainEnd=t;total=t;
+  for(const x of S.texts) total=Math.max(total,x.start+x.dur);
+  for(const a of S.audios) total=Math.max(total,a.start+a.out-a.in);
+  if(T>total) T=total;
+}
+const eff=t=>total>0&&t>=total?total-0.001:t;
+function fadeK(l,d,fi,fo){let k=1;if(fi>0&&l<fi)k=Math.min(k,l/fi);if(fo>0&&l>d-fo)k=Math.min(k,(d-l)/fo);return clamp(k,0,1);}
+
+// ---------- 描画 ----------
+function filt(c){
+  const p=[];
+  if(c.br!==100)p.push(`brightness(${c.br}%)`);if(c.ct!==100)p.push(`contrast(${c.ct}%)`);if(c.sat!==100)p.push(`saturate(${c.sat}%)`);
+  if(c.hue)p.push(`hue-rotate(${c.hue}deg)`);if(c.gray)p.push(`grayscale(${c.gray}%)`);if(c.sepia)p.push(`sepia(${c.sepia}%)`);
+  if(c.blur)p.push(`blur(${c.blur*S.set.h/720}px)`);
+  return p.length?p.join(' '):'none';
+}
+function drawClip(c,l,d,alpha){
+  const m=med(c.mid);if(!m||!m.url||alpha<=0) return;
+  let src,sw,sh;
+  if(m.type==='image'){src=m.img;if(!src||!src.naturalWidth) return;sw=src.naturalWidth;sh=src.naturalHeight;}
+  else{const r=RT.get(c.id);if(!r||r.el.readyState<2) return;src=r.el;sw=src.videoWidth;sh=src.videoHeight;if(!sw) return;}
+  const W=S.set.w,H=S.set.h,rot=((+c.rot||0)%360+360)%360,sw2=rot===90||rot===270;
+  const bw=sw2?sh:sw,bh=sw2?sw:sh;let dw,dh;
+  if(c.fit==='stretch'){dw=sw2?H:W;dh=sw2?W:H;}
+  else{const k=c.fit==='cover'?Math.max(W/bw,H/bh):Math.min(W/bw,H/bh);dw=sw*k;dh=sh*k;}
+  const p=d>0?clamp(l/d,0,1):0,z0=c.scale??100,z1=c.scale2??z0,z=(z0+(z1-z0)*p)/100;
+  ctx.save();ctx.globalAlpha=alpha;ctx.filter=filt(c);
+  ctx.translate(W/2+(c.ox||0)/100*W,H/2+(c.oy||0)/100*H);
+  if(c.flip) ctx.scale(-1,1);
+  ctx.rotate(rot*Math.PI/180);ctx.scale(z,z);
+  ctx.drawImage(src,-dw/2,-dh/2,dw,dh);
+  ctx.restore();
+}
+function hexA(h,a){const n=parseInt(h.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
+function drawText(x,t){
+  const W=S.set.w,H=S.set.h,l=t-x.start,kIn=x.fadeIn>0?clamp(l/x.fadeIn,0,1):1;
+  const a=fadeK(l,x.dur,x.anim==='type'?0:x.fadeIn,x.fadeOut);
+  const fs=x.size*H/720,lh=fs*1.25,pd=fs*0.3;
+  ctx.save();ctx.filter='none';ctx.globalAlpha=a;
+  ctx.font=`${x.italic?'italic ':''}${x.bold?'bold ':''}${fs}px ${(FONTS[x.font]||FONTS.gothic)[1]}`;
+  ctx.textBaseline='middle';
+  let lines=String(x.text).split('\n');
+  const bw=Math.max(1,...lines.map(s=>ctx.measureText(s).width)),bh=lh*lines.length,cx=x.x/100*W,cy=x.y/100*H;
+  x._bb=[cx-bw/2-pd,cy-bh/2-pd*.6,bw+pd*2,bh+pd*1.2];
+  if(a<=0){ctx.restore();return;}
+  if(x.anim==='type'){const n0=lines.join('\n').length,d=Math.min(x.dur*.7,Math.max(.3,n0*.07));let n=Math.floor(n0*clamp(l/d,0,1));lines=lines.map(s=>{const r=s.slice(0,Math.max(0,n));n-=s.length+1;return r;});}
+  const e=1-Math.pow(1-kIn,3);
+  if(x.anim==='up') ctx.translate(0,(1-e)*fs*.8);
+  if(x.anim==='zoom'){const s=.5+.5*e;ctx.translate(cx,cy);ctx.scale(s,s);ctx.translate(-cx,-cy);}
+  if(x.bgOn){ctx.fillStyle=hexA(x.bg,x.bgA/100);ctx.beginPath();const [bx,by,bw2,bh2]=x._bb;if(ctx.roundRect)ctx.roundRect(bx,by,bw2,bh2,pd*.5);else ctx.rect(bx,by,bw2,bh2);ctx.fill();}
+  ctx.textAlign=x.align;
+  const ax=x.align==='left'?cx-bw/2:x.align==='right'?cx+bw/2:cx;
+  lines.forEach((s,i)=>{
+    const y=cy-bh/2+lh*(i+.5);
+    if(x.shadow){ctx.shadowColor='rgba(0,0,0,.6)';ctx.shadowBlur=fs*.15;ctx.shadowOffsetX=ctx.shadowOffsetY=fs*.05;}
+    if(x.strokeW>0){ctx.lineJoin='round';ctx.lineWidth=x.strokeW*H/720*2;ctx.strokeStyle=x.stroke;ctx.strokeText(s,ax,y);ctx.shadowColor='transparent';}
+    ctx.fillStyle=x.color;ctx.fillText(s,ax,y);ctx.shadowColor='transparent';
+  });
+  ctx.restore();
+}
+function render(t0){
+  const W=S.set.w,H=S.set.h,t=eff(t0);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;fitCanvas();}
+  ctx.save();ctx.globalAlpha=1;ctx.filter='none';ctx.fillStyle=S.set.bg;ctx.fillRect(0,0,W,H);ctx.restore();
+  for(const c of S.clips){
+    if(t<c._s||t>=c._e) continue;
+    const d=c._e-c._s,l=t-c._s;let a=fadeK(l,d,c.fadeIn,c.fadeOut);
+    if(c._x>0&&l<c._x) a*=l/c._x;
+    drawClip(c,l,d,a);
+  }
+  for(const x of S.texts) if(t>=x.start&&t<x.start+x.dur) drawText(x,t);
+  placeSelBox();
+}
+function placeSelBox(){
+  const b=$('selBox'),it=sel&&sel.kind==='text'?findItem('text',sel.id):null,t=eff(T);
+  if(!it||EXP||t<it.start||t>=it.start+it.dur||!it._bb){b.style.display='none';return;}
+  const r=cv.getBoundingClientRect(),vr=$('view').getBoundingClientRect(),k=r.width/S.set.w;
+  Object.assign(b.style,{display:'block',left:(r.left-vr.left+it._bb[0]*k)+'px',top:(r.top-vr.top+it._bb[1]*k)+'px',width:it._bb[2]*k+'px',height:it._bb[3]*k+'px'});
+}
+function fitCanvas(){
+  const v=$('view'),vw=v.clientWidth-20,vh=v.clientHeight-20;if(vw<=0||vh<=0) return;
+  const k=Math.min(vw/S.set.w,vh/S.set.h);cv.style.width=Math.floor(S.set.w*k)+'px';cv.style.height=Math.floor(S.set.h*k)+'px';
+  dirty=true;
+}
+
+// ---------- 再生同期 ----------
+function seekTo(r,v){
+  const el=r.el;if(isFinite(el.duration)) v=Math.min(v,Math.max(0,el.duration-0.001));
+  if(r.want!=null&&Math.abs(r.want-v)<0.004&&(el.seeking||Math.abs(el.currentTime-v)<0.05)) return;
+  r.want=v;el.currentTime=v;
+}
+function syncMedia(t0,play){
+  const t=eff(t0),items=[];
+  S.clips.forEach((c,i)=>{
+    const d=c._e-c._s,act=t>=c._s&&t<c._e;let g=0;
+    if(act&&!c.mute){const l=t-c._s;g=(c.vol??100)/100*fadeK(l,d,c.fadeIn,c.fadeOut);if(c._x>0&&l<c._x)g*=l/c._x;const n=S.clips[i+1];if(n&&n._x>0&&t>n._s)g*=clamp((c._e-t)/n._x,0,1);}
+    items.push([c,act,c.in+(t-c._s)*c.speed,c.speed,g,c._s,c.in]);
+  });
+  for(const a of S.audios){
+    const d=a.out-a.in,act=t>=a.start&&t<a.start+d;
+    const g=act?(a.vol??100)/100*fadeK(t-a.start,d,a.fadeIn,a.fadeOut):0;
+    items.push([a,act,a.in+(t-a.start),1,g,a.start,a.in]);
+  }
+  for(const [it,act,exp,spd,g,st,inn] of items){
+    const r=rt(it);if(!r) continue;const el=r.el;
+    if(r.gain) r.gain.gain.value=g;else el.volume=clamp(g,0,1);
+    if(act){
+      if(play){
+        if(el.playbackRate!==spd) el.playbackRate=spd;
+        if(!el.seeking&&Math.abs(el.currentTime-exp)>0.25){r.want=exp;el.currentTime=exp;}
+        if(el.paused) el.play().catch(()=>{});
+      }else{if(!el.paused) el.pause();seekTo(r,exp);}
+    }else{
+      if(!el.paused) el.pause();
+      const ahead=st-t;if(ahead>0&&ahead<3&&!el.seeking) seekTo(r,inn);
+    }
+  }
+}
+function activeEls(t0){const t=eff(t0),out=[];for(const c of S.clips) if(t>=c._s&&t<c._e){const r=RT.get(c.id);if(r&&!r.el.error) out.push(r.el);}return out;}
+const stalled=()=>activeEls(T).some(el=>el.seeking||el.readyState<2);
+
+function setTime(t){
+  T=clamp(t,0,total);
+  if(playing){playT0=T;playN0=performance.now();}else syncMedia(T,false);
+  dirty=true;updTime();
+}
+function play(){
+  if(playing||total<=0) return;
+  audioInit();if(AC.state!=='running') AC.resume().catch(()=>{});
+  if(T>=total-0.01) T=0;
+  playing=true;playT0=T;playN0=lastNow=performance.now();stallMs=0;
+  syncMedia(T,true);updPlayBtn();
+}
+function pause(){if(!playing) return;playing=false;syncMedia(T,false);updPlayBtn();dirty=true;}
+const toggle=()=>playing?pause():play();
+function updPlayBtn(){$('bPlay').textContent=playing?'❚❚':'▶';}
+function updTime(){
+  $('tc').textContent=fmt(T)+' / '+fmt(total);
+  phEl.style.left=(T*pps)+'px';
+}
+function tick(now){
+  if(playing){
+    const st=stalled();
+    if(st&&stallMs<3000){stallMs+=now-lastNow;playN0+=now-lastNow;}else if(!st) stallMs=0;
+    lastNow=now;
+    const t=playT0+(now-playN0)/1000;
+    if(t>=total){T=total;render(T);if(EXP) finishExport(false);else pause();}
+    else{T=t;syncMedia(T,true);render(T);}
+    updTime();
+    if(EXP){$('eBar').style.width=(T/total*100).toFixed(1)+'%';$('eTxt').textContent=fmt(T)+' / '+fmt(total);}
+    else{const x=T*pps;if(x>tl.scrollLeft+tl.clientWidth-30||x<tl.scrollLeft) tl.scrollLeft=x-60;}
+    dirty=false;
+  }else if(dirty){dirty=false;render(T);updTime();}
+  requestAnimationFrame(tick);
+}
+
+// ---------- 素材の読み込み ----------
+const VEXT=/\.(mp4|m4v|webm|mov|mkv|ogv|avi|3gp)$/i,AEXT=/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|weba)$/i,IEXT=/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+function kindOf(f){
+  const t=f.type||'';
+  if(t.startsWith('video/')) return 'video';if(t.startsWith('audio/')) return 'audio';if(t.startsWith('image/')) return 'image';
+  if(VEXT.test(f.name)) return 'video';if(AEXT.test(f.name)) return 'audio';if(IEXT.test(f.name)) return 'image';
+  return null;
+}
+function waitEv(el,ok,ms=20000){
+  return new Promise((res,rej)=>{
+    let tm;const f=e=>{done();res(e);},g=()=>{done();rej(new Error('このブラウザでは再生できない形式です'));};
+    function done(){clearTimeout(tm);el.removeEventListener(ok,f);el.removeEventListener('error',g);}
+    el.addEventListener(ok,f);el.addEventListener('error',g);tm=setTimeout(()=>{done();rej(new Error('読み込みがタイムアウトしました'));},ms);
+  });
+}
+async function realDuration(el){
+  if(isFinite(el.duration)&&el.duration>0) return el.duration;
+  // MediaRecorder で作った WebM などは長さが入っていないので末尾へシークして求める
+  await new Promise(res=>{const f=()=>{if(isFinite(el.duration)){el.removeEventListener('durationchange',f);res();}};el.addEventListener('durationchange',f);el.currentTime=1e9;setTimeout(res,8000);});
+  const d=el.duration;el.currentTime=0;
+  return isFinite(d)?d:0;
+}
+function thumbOf(src,w,h){
+  const c=document.createElement('canvas'),hh=54,ww=Math.max(16,Math.min(160,Math.round(hh*w/h)));
+  c.width=ww;c.height=hh;const g=c.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,ww,hh);
+  try{g.drawImage(src,0,0,ww,hh);return c.toDataURL('image/jpeg',.7);}catch(e){return null;}
+}
+async function peaksOf(m){
+  if(!m.file||m.file.size>300e6) return;
+  try{
+    const buf=await AC.decodeAudioData(await m.file.arrayBuffer());
+    const rate=50,n=Math.ceil(buf.duration*rate),per=Math.max(1,Math.floor(buf.sampleRate/rate)),out=new Float32Array(n);
+    const chs=[];for(let i=0;i<Math.min(2,buf.numberOfChannels);i++) chs.push(buf.getChannelData(i));
+    for(let i=0;i<n;i++){let mx=0;const s=i*per,e=Math.min(s+per,chs[0].length);for(const ch of chs) for(let j=s;j<e;j+=4){const v=Math.abs(ch[j]);if(v>mx) mx=v;}out[i]=mx;}
+    m.peaks=out;
+  }catch(e){}
+}
+async function probe(m){
+  if(m.type==='image'){
+    const img=new Image();img.src=m.url;await img.decode();
+    m.img=img;m.w=img.naturalWidth||1280;m.h=img.naturalHeight||720;m.duration=0;m.thumb=thumbOf(img,m.w,m.h);
+    return;
+  }
+  const el=document.createElement(m.type==='audio'?'audio':'video');
+  el.preload='auto';el.muted=true;el.playsInline=true;el.src=m.url;
+  try{
+    await waitEv(el,'loadedmetadata');
+    m.duration=await realDuration(el);
+    if(m.type==='video'){
+      m.w=el.videoWidth;m.h=el.videoHeight;
+      if(!m.w){m.type='audio';}
+      else{
+        const sk=waitEv(el,'seeked',8000);el.currentTime=Math.min(1,m.duration*.1);
+        await sk.catch(()=>{});m.thumb=thumbOf(el,m.w,m.h);
+      }
+    }
+  }finally{el.removeAttribute('src');el.load();}
+  if(!m.duration) throw new Error('長さを取得できませんでした');
+  if(m.type==='audio') await peaksOf(m);
+}
+function newClip(m){
+  return {id:nid('c'),mid:m.id,in:0,out:m.type==='image'?5:m.duration,speed:1,vol:100,mute:false,fadeIn:0,fadeOut:0,xfade:0,fit:'contain',scale:100,scale2:100,ox:0,oy:0,rot:0,flip:false,br:100,ct:100,sat:100,hue:0,gray:0,sepia:0,blur:0};
+}
+function newAudio(m,start){return {id:nid('a'),mid:m.id,start:Math.max(0,start),in:0,out:m.duration,vol:100,fadeIn:0,fadeOut:0};}
+function addToMain(m,idx){const c=newClip(m);if(idx==null||idx>=S.clips.length) S.clips.push(c);else S.clips.splice(idx,0,c);return c;}
+function addToAudio(m,start){
+  if(start==null){start=0;for(const a of S.audios) start=Math.max(start,a.start+a.out-a.in);}
+  const a=newAudio(m,start);S.audios.push(a);return a;
+}
+function applyAutoRes(w,h){
+  if(!S.set.auto||!w||!h) return;
+  const k=Math.min(1,1920/Math.max(w,h));
+  S.set.w=Math.max(2,Math.round(w*k/2)*2);S.set.h=Math.max(2,Math.round(h*k/2)*2);S.set.auto=false;
+  syncSetUI();fitCanvas();
+}
+async function addFiles(files,{auto=true}={}){
+  audioInit();
+  let n=0,relinked=0,last=null;
+  for(const f of files){
+    const type=kindOf(f);
+    if(!type){msg(`${f.name} は対応していないファイルです`,true);continue;}
+    let m=S.media.find(x=>!x.url&&x.name===f.name&&(!x.size||x.size===f.size));
+    const isRelink=!!m;
+    if(!m){m={id:nid('m'),name:f.name,type,size:f.size};S.media.push(m);}
+    m.file=f;m.url=URL.createObjectURL(f);m.type=type;m.loading=true;m.error=null;renderLib();
+    msg(`${f.name} を読み込んでいます…`);
+    try{await probe(m);}
+    catch(err){m.loading=false;m.error=err.message||String(err);msg(`${f.name}: ${m.error}`,true);if(!isRelink){URL.revokeObjectURL(m.url);S.media.splice(S.media.indexOf(m),1);}else{m.url=null;}renderLib();continue;}
+    m.loading=false;
+    if(isRelink){relinked++;}
+    else if(auto){
+      if(m.type==='audio') last=addToAudio(m);
+      else{applyAutoRes(m.w,m.h);last=addToMain(m);}
+    }
+    n++;renderLib();
+  }
+  if(last){sel={kind:S.audios.includes(last)?'audio':'clip',id:last.id};}
+  commit();refresh();
+  if(n) msg(relinked?`${n} 件読み込みました（${relinked} 件を再リンク）`:`${n} 件の素材を追加しました`);
+}
+function removeMedia(m){
+  const used=S.clips.some(c=>c.mid===m.id)||S.audios.some(a=>a.mid===m.id);
+  if(used&&!confirm(`「${m.name}」を使っているクリップもタイムラインから削除します。よろしいですか？`)) return;
+  S.clips=S.clips.filter(c=>c.mid!==m.id);S.audios=S.audios.filter(a=>a.mid!==m.id);
+  S.media.splice(S.media.indexOf(m),1);
+  gcRt();if(m.url) URL.revokeObjectURL(m.url);
+  if(sel&&!selItem()) sel=null;
+  commit();renderLib();refresh();
+}
+let relinkTarget=null;
+function renderLib(){
+  const L=$('libList');L.textContent='';
+  if(!S.media.length){L.innerHTML='<div class="empty">「開く」ボタン、またはファイルの<br>ドラッグ＆ドロップで<br>動画・音声・画像を追加</div>';return;}
+  for(const m of S.media){
+    const d=document.createElement('div');d.className='mi'+(m.url||m.loading?'':' missing');d.draggable=!!m.url&&!m.loading;
+    const th=document.createElement('div');th.className='th';
+    if(m.thumb) th.style.backgroundImage=`url("${m.thumb}")`;else th.textContent=m.type==='audio'?'♪':m.type==='image'?'▣':'▶';
+    const inf=document.createElement('div');inf.style.minWidth='0';
+    const nm=document.createElement('div');nm.className='nm';nm.textContent=m.name;nm.title=m.name;
+    const sub=document.createElement('div');sub.className='sub';
+    sub.textContent=m.loading?'読み込み中…':!m.url?'未リンク（ファイルを選択してください）':(m.type==='video'?'動画 ':m.type==='audio'?'音声 ':'画像 ')+(m.type==='image'?`${m.w}×${m.h}`:fmt(m.duration,false)+(m.w?` ・ ${m.w}×${m.h}`:''));
+    inf.append(nm,sub);
+    const acts=document.createElement('div');acts.className='acts';
+    const btn=(t,title,f)=>{const b=document.createElement('button');b.textContent=t;b.title=title;b.onclick=f;acts.append(b);};
+    if(m.url&&!m.loading){
+      if(m.type!=='audio') btn('＋映像','映像トラックの末尾に追加',()=>{const c=addToMain(m);sel={kind:'clip',id:c.id};commit();refresh();});
+      if(m.type!=='image') btn('＋音声','再生位置から音声トラックに追加（BGM など）',()=>{const a=addToAudio(m,T);sel={kind:'audio',id:a.id};commit();refresh();});
+    }
+    if(!m.url&&!m.loading) btn('ファイルを選択','この素材のファイルを選び直す',()=>{relinkTarget=m;$('fRelink').click();});
+    btn('×','素材を削除',()=>removeMedia(m));
+    d.append(th,inf,acts);
+    d.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/x-media',m.id);e.dataTransfer.effectAllowed='copy';});
+    d.addEventListener('dblclick',e=>{if(e.target.closest('button')||!m.url) return;const it=m.type==='audio'?addToAudio(m,T):addToMain(m);sel={kind:m.type==='audio'?'audio':'clip',id:it.id};commit();refresh();});
+    L.append(d);
+  }
+}
+
+// ---------- タイムライン ----------
+const DIVS=new Map();
+const VH=60,TLH=24,ALH=36;
+function cdiv(id,kind,parent){
+  let d=DIVS.get(id);
+  if(!d){
+    d=document.createElement('div');d.className='clip k-'+kind;d.dataset.id=id;d.dataset.kind=kind;
+    if(kind==='audio') d.append(document.createElement('canvas'));
+    if(kind==='clip'){const x=document.createElement('div');x.className='xf';d.append(x);}
+    const s=document.createElement('span');s.className='nm';d.append(s);
+    d.addEventListener('pointerdown',clipDown);
+    DIVS.set(id,d);
+  }
+  if(d.parentNode!==parent) parent.append(d);
+  return d;
+}
+function pos(d,s,dur,top,h){d.style.left=(s*pps)+'px';d.style.width=Math.max(4,dur*pps)+'px';d.style.top=top+'px';d.style.height=h+'px';}
+function lanes(items,s,e){
+  const ends=[],res=new Map();
+  [...items].sort((a,b)=>s(a)-s(b)).forEach(it=>{let l=ends.findIndex(x=>x<=s(it)+1e-6);if(l<0){l=ends.length;ends.push(0);}ends[l]=e(it);res.set(it.id,l);});
+  return [res,Math.max(1,ends.length)];
+}
+function drawWave(d,a,h){
+  const m=med(a.mid),c=d.querySelector('canvas'),w=Math.max(1,Math.min(4000,Math.round((a.out-a.in)*pps)));
+  const key=[w,h,a.in,a.out,!!(m&&m.peaks)].join();if(c._k===key) return;c._k=key;
+  c.width=w;c.height=h;const g=c.getContext('2d');g.clearRect(0,0,w,h);
+  if(!m||!m.peaks) return;
+  const p=m.peaks,n=p.length,span=a.out-a.in;g.fillStyle='rgba(255,255,255,.5)';
+  for(let x=0;x<w;x++){
+    const i0=Math.floor((a.in+x/w*span)*50),i1=Math.max(i0+1,Math.ceil((a.in+(x+1)/w*span)*50));
+    let mx=0;for(let i=i0;i<i1&&i<n;i++) if(p[i]>mx) mx=p[i];
+    const y=mx*h*.85;g.fillRect(x,(h-y)/2,1,Math.max(1,y));
+  }
+}
+function renderTL(){
+  const seen=new Set();
+  tlIn.style.width=Math.max(tl.clientWidth,(total+5)*pps+40)+'px';
+  for(const c of S.clips){
+    seen.add(c.id);const d=cdiv(c.id,'clip',trV),m=med(c.mid);
+    pos(d,c._s,c._e-c._s,3,VH-7);
+    d.classList.toggle('missing',!m||!m.url);
+    d.style.backgroundImage=m&&m.thumb?`url("${m.thumb}")`:'';
+    d.querySelector('.xf').style.width=(c._x*pps)+'px';
+    d.querySelector('.nm').textContent=(m?m.name:'(素材なし)')+(c.speed!==1?` ×${c.speed}`:'')+(c.mute?' 🔇':'');
+    d.title=`${m?m.name:''}\n${fmt(c.in)} – ${fmt(c.out)}（長さ ${fmt(c._e-c._s)}）`;
+  }
+  const [tL,tN]=lanes(S.texts,x=>x.start,x=>x.start+x.dur);
+  trT.style.height=(tN*TLH+6)+'px';
+  for(const x of S.texts){
+    seen.add(x.id);const d=cdiv(x.id,'text',trT);
+    pos(d,x.start,x.dur,tL.get(x.id)*TLH+3,TLH-3);
+    d.querySelector('.nm').textContent='T '+String(x.text).replace(/\n/g,' ');
+  }
+  const [aL,aN]=lanes(S.audios,a=>a.start,a=>a.start+a.out-a.in);
+  trA.style.height=(aN*ALH+6)+'px';
+  for(const a of S.audios){
+    seen.add(a.id);const d=cdiv(a.id,'audio',trA),m=med(a.mid);
+    pos(d,a.start,a.out-a.in,aL.get(a.id)*ALH+3,ALH-3);
+    d.classList.toggle('missing',!m||!m.url);
+    d.querySelector('.nm').textContent='♪ '+(m?m.name:'(素材なし)');
+    drawWave(d,a,ALH-5);
+  }
+  for(const [id,d] of DIVS) if(!seen.has(id)){d.remove();DIVS.delete(id);}
+  for(const d of DIVS.values()) d.classList.toggle('sel',!!sel&&sel.id===d.dataset.id);
+  $('lV').style.height=trV.offsetHeight+'px';$('lT').style.height=trT.offsetHeight+'px';$('lA').style.height=trA.offsetHeight+'px';
+  drawRuler();updTime();
+}
+let RC=null;
+function drawRuler(){
+  const w=Math.max(1,tl.clientWidth),h=24,dpr=window.devicePixelRatio||1;
+  if(ruler.width!==Math.round(w*dpr)){ruler.width=Math.round(w*dpr);ruler.height=h*dpr;}
+  ruler.style.width=w+'px';ruler.style.height=h+'px';
+  if(!RC){const cs=getComputedStyle(document.documentElement);RC={fg:cs.getPropertyValue('--muted').trim()||'#888',line:cs.getPropertyValue('--line').trim()||'#ccc'};}
+  const g=ruler.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
+  const sl=tl.scrollLeft,steps=[.1,.2,.5,1,2,5,10,15,30,60,120,300,600,1800];
+  const step=steps.find(s=>s*pps>=70)||3600,minor=step/5;
+  g.strokeStyle=RC.fg;g.fillStyle=RC.fg;g.font='10px system-ui,sans-serif';g.lineWidth=1;g.beginPath();
+  for(let t=Math.floor(sl/pps/minor)*minor;t*pps-sl<w;t+=minor){
+    const x=Math.round(t*pps-sl)+.5,major=Math.abs(t/step-Math.round(t/step))<1e-6;
+    g.moveTo(x,h);g.lineTo(x,major?h-10:h-4);
+    if(major) g.fillText(step<1?fmt(t):fmt(t,false),x+3,11);
+  }
+  g.stroke();
+}
+function snapPoints(excl){
+  const p=[0,T,mainEnd];
+  for(const c of S.clips) if(c.id!==excl) p.push(c._s,c._e);
+  for(const x of S.texts) if(x.id!==excl) p.push(x.start,x.start+x.dur);
+  for(const a of S.audios) if(a.id!==excl) p.push(a.start,a.start+a.out-a.in);
+  return p;
+}
+function clipDown(e){
+  if(e.button!==0) return;
+  const d=e.currentTarget,kind=d.dataset.kind,id=d.dataset.id;
+  e.stopPropagation();e.preventDefault();
+  select(kind,id);
+  const it=findItem(kind,id);if(!it) return;
+  const rect=d.getBoundingClientRect(),ox=e.clientX-rect.left,edge=Math.min(8,rect.width/3);
+  const mode=ox<edge?'L':ox>rect.width-edge?'R':'M';
+  const o={...it},x0=e.clientX,m=med(it.mid);let moved=false,insIdx=-1;
+  const pts=snapOn?snapPoints(id):[],thr=8/pps;
+  const sn=v=>{let best=null,bd=thr;for(const p of pts){const dd=Math.abs(p-v);if(dd<bd){bd=dd;best=p;}}return best;};
+  d.setPointerCapture(e.pointerId);
+  const onMove=ev=>{
+    const dx=ev.clientX-x0;if(!moved&&Math.abs(dx)<3) return;moved=true;const dt=dx/pps;
+    if(kind==='clip'){
+      const sp=o.speed||1,img=m&&m.type==='image',maxOut=img?36000:(m?m.duration:o.out);
+      if(mode==='M'){
+        d.style.transform=`translateX(${dx}px)`;d.style.zIndex=4;
+        const tx=ev.clientX-tlIn.getBoundingClientRect().left,others=S.clips.filter(c=>c!==it);
+        let idx=others.findIndex(c=>tx<(c._s+c._e)/2*pps);if(idx<0) idx=others.length;insIdx=idx;
+        insMark.style.left=(idx<others.length?others[idx]._s*pps:(others.length?others[others.length-1]._e*pps:0))+'px';insMark.style.display='block';
+        return;
+      }
+      if(mode==='L'){if(img) it.out=clamp(o.out-dt,o.in+.1,maxOut);else it.in=clamp(o.in+dt*sp,0,o.out-.05);}
+      else{let e2=o._e+dt;const s2=sn(e2);if(s2!=null) e2=s2;it.out=clamp(o.in+(e2-o._s)*sp,o.in+.05,maxOut);}
+    }else{
+      const isA=kind==='audio',len=isA?o.out-o.in:o.dur,maxOut=isA&&m?m.duration:Infinity;
+      if(mode==='M'){
+        let s=Math.max(0,o.start+dt);const a=sn(s),b=sn(s+len);
+        if(a!=null) s=a;else if(b!=null) s=b-len;
+        it.start=Math.max(0,s);
+      }else if(mode==='L'){
+        let s=o.start+dt;const a=sn(s);if(a!=null) s=a;
+        s=clamp(s,isA?Math.max(0,o.start-o.in):0,o.start+len-.1);
+        it.start=s;if(isA) it.in=o.in+(s-o.start);else it.dur=o.start+len-s;
+      }else{
+        let e2=o.start+len+dt;const a=sn(e2);if(a!=null) e2=a;
+        e2=clamp(e2,o.start+.1,isA?o.start+(maxOut-o.in):Infinity);
+        if(isA) it.out=o.in+(e2-o.start);else it.dur=e2-o.start;
+      }
+    }
+    live();
+  };
+  const onUp=()=>{
+    d.removeEventListener('pointermove',onMove);d.removeEventListener('pointerup',onUp);d.removeEventListener('pointercancel',onUp);
+    d.style.transform='';d.style.zIndex='';insMark.style.display='none';
+    if(!moved) return;
+    if(kind==='clip'&&mode==='M'&&insIdx>=0){const i=S.clips.indexOf(it);S.clips.splice(i,1);S.clips.splice(insIdx,0,it);}
+    commit();refresh();
+  };
+  d.addEventListener('pointermove',onMove);d.addEventListener('pointerup',onUp);d.addEventListener('pointercancel',onUp);
+}
+tlIn.addEventListener('pointerdown',e=>{
+  if(e.button!==0||e.target.closest('.clip')) return;
+  if(e.target!==ruler&&sel) select(null);
+  const go=ev=>setTime((ev.clientX-tlIn.getBoundingClientRect().left)/pps);
+  go(e);tlIn.setPointerCapture(e.pointerId);
+  const up=()=>{tlIn.removeEventListener('pointermove',go);tlIn.removeEventListener('pointerup',up);tlIn.removeEventListener('pointercancel',up);};
+  tlIn.addEventListener('pointermove',go);tlIn.addEventListener('pointerup',up);tlIn.addEventListener('pointercancel',up);
+});
+tl.addEventListener('scroll',drawRuler);
+tl.addEventListener('wheel',e=>{if(!e.ctrlKey) return;e.preventDefault();setZoom(pps*(e.deltaY<0?1.2:1/1.2));},{passive:false});
+const z2v=p=>Math.round(Math.log2(p/2)*10),v2z=v=>2*Math.pow(2,v/10);
+function setZoom(p,keep=true){
+  pps=clamp(p,2,2000);$('zoom').value=z2v(pps);renderTL();
+  if(keep) tl.scrollLeft=T*pps-tl.clientWidth/2;
+  drawRuler();
+}
+$('zoom').oninput=e=>setZoom(v2z(+e.target.value));
+$('bFit').onclick=()=>{setZoom((tl.clientWidth-40)/Math.max(total,1),false);tl.scrollLeft=0;};
+$('cSnapOn').onchange=e=>{snapOn=e.target.checked;};
+
+// ライブラリからトラックへのドラッグ
+const isMed=e=>[...e.dataTransfer.types].includes('text/x-media');
+const hasFiles=e=>[...e.dataTransfer.types].includes('Files');
+for(const tr of [trV,trA,trT]){
+  tr.addEventListener('dragover',e=>{if(isMed(e)){e.preventDefault();tr.classList.add('dropok');}});
+  tr.addEventListener('dragleave',()=>tr.classList.remove('dropok'));
+}
+function mediaDrop(e){
+  for(const tr of [trV,trA,trT]) tr.classList.remove('dropok');
+  const m=med(e.dataTransfer.getData('text/x-media'));if(!m||!m.url) return;
+  const tr=e.target.closest&&e.target.closest('.track'),t=Math.max(0,(e.clientX-tlIn.getBoundingClientRect().left)/pps);
+  let it,kind;
+  if(tr===trA||(m.type==='audio')){if(m.type==='image') return;it=addToAudio(m,tr===trA?t:T);kind='audio';}
+  else if(tr===trV){let idx=S.clips.findIndex(c=>t<(c._s+c._e)/2);if(idx<0) idx=S.clips.length;it=addToMain(m,idx);kind='clip';}
+  else{it=addToMain(m);kind='clip';}
+  sel={kind,id:it.id};commit();refresh();
+}
+
+// ---------- プレビュー上の操作 ----------
+cv.addEventListener('pointerdown',e=>{
+  if(e.button!==0||EXP) return;
+  const r=cv.getBoundingClientRect(),k=S.set.w/r.width,px=(e.clientX-r.left)*k,py=(e.clientY-r.top)*k,t=eff(T);
+  const hit=S.texts.filter(x=>t>=x.start&&t<x.start+x.dur&&x._bb).reverse().find(x=>px>=x._bb[0]&&px<=x._bb[0]+x._bb[2]&&py>=x._bb[1]&&py<=x._bb[1]+x._bb[3]);
+  let it,kind,ox,oy;
+  if(hit){it=hit;kind='text';ox=hit.x;oy=hit.y;if(!sel||sel.id!==hit.id) select('text',hit.id);}
+  else{
+    const c=[...S.clips].reverse().find(c=>t>=c._s&&t<c._e);
+    if(!c){select(null);return;}
+    if(!sel||sel.id!==c.id){select('clip',c.id);return;}
+    it=c;kind='clip';ox=c.ox;oy=c.oy;
+  }
+  cv.setPointerCapture(e.pointerId);let moved=false;
+  const mv=ev=>{
+    const qx=(ev.clientX-r.left)*k,qy=(ev.clientY-r.top)*k;moved=true;
+    if(kind==='text'){
+      it.x=clamp(ox+(qx-px)/S.set.w*100,0,100);it.y=clamp(oy+(qy-py)/S.set.h*100,0,100);
+      if(Math.abs(it.x-50)<1) it.x=50;
+    }else{it.ox=clamp(ox+(qx-px)/S.set.w*100,-100,100);it.oy=clamp(oy+(qy-py)/S.set.h*100,-100,100);}
+    dirty=true;
+  };
+  const up=()=>{cv.removeEventListener('pointermove',mv);cv.removeEventListener('pointerup',up);cv.removeEventListener('pointercancel',up);if(moved){it.x=r3(it.x);commit();propsUI();}};
+  cv.addEventListener('pointermove',mv);cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+});
+
+// ---------- 編集操作 ----------
+function select(kind,id){
+  sel=kind?{kind,id}:null;
+  for(const d of DIVS.values()) d.classList.toggle('sel',!!sel&&sel.id===d.dataset.id);
+  propsUI();updUI();dirty=true;
+}
+function itemsAt(t){
+  const out=[];
+  for(const c of S.clips) if(t>c._s&&t<c._e) out.push(['clip',c]);
+  for(const x of S.texts) if(t>x.start&&t<x.start+x.dur) out.push(['text',x]);
+  for(const a of S.audios) if(t>a.start&&t<a.start+a.out-a.in) out.push(['audio',a]);
+  return out;
+}
+function split(){
+  const t=T,cand=itemsAt(t);
+  let pick=sel&&cand.find(([k,x])=>x.id===sel.id);
+  if(!pick){const cs=cand.filter(([k])=>k==='clip');pick=cs[cs.length-1]||cand[0];}
+  if(!pick){msg('再生位置にクリップがありません',true);return;}
+  const [kind,it]=pick;let b;
+  if(kind==='clip'){
+    const l=it.in+(t-it._s)*it.speed;if(l<=it.in+.03||l>=it.out-.03) return;
+    b={...it,id:nid('c'),in:l,fadeIn:0,xfade:0};
+    if(it.scale!==it.scale2){const p=(t-it._s)/(it._e-it._s),z=it.scale+(it.scale2-it.scale)*p;b.scale=r3(z);it.scale2=r3(z);}
+    it.out=l;it.fadeOut=0;S.clips.splice(S.clips.indexOf(it)+1,0,b);
+  }else if(kind==='text'){
+    const l=t-it.start;if(l<.05||l>it.dur-.05) return;
+    b={...it,id:nid('t'),start:t,dur:it.dur-l,fadeIn:0};it.dur=l;it.fadeOut=0;S.texts.push(b);
+  }else{
+    const l=t-it.start;if(l<.03||l>it.out-it.in-.03) return;
+    b={...it,id:nid('a'),start:t,in:it.in+l,fadeIn:0};it.out=it.in+l;it.fadeOut=0;S.audios.push(b);
+  }
+  sel={kind,id:b.id};commit();refresh();msg('分割しました');
+}
+function del(){
+  const it=selItem();if(!it) return;
+  const a=arr(sel.kind);a.splice(a.indexOf(it),1);sel=null;gcRt();commit();refresh();
+}
+function dup(){
+  const it=selItem();if(!it) return;const kind=sel.kind;
+  const b=JSON.parse(JSON.stringify(it,(k,v)=>k[0]==='_'?undefined:v));
+  b.id=nid(kind==='clip'?'c':kind==='text'?'t':'a');
+  if(kind==='clip') S.clips.splice(S.clips.indexOf(it)+1,0,b);
+  else if(kind==='text'){b.start=it.start+it.dur;S.texts.push(b);}
+  else{b.start=it.start+it.out-it.in;S.audios.push(b);}
+  sel={kind,id:b.id};commit();refresh();
+}
+function addText(){
+  const x={id:nid('t'),text:'テキスト',start:r3(T>=total&&total>0?Math.max(0,total-3):T),dur:3,x:50,y:85,size:48,color:'#ffffff',font:'gothic',bold:true,italic:false,strokeW:3,stroke:'#000000',shadow:true,bgOn:false,bg:'#000000',bgA:50,align:'center',fadeIn:.3,fadeOut:.3,anim:'none'};
+  S.texts.push(x);sel={kind:'text',id:x.id};commit();refresh();
+  const ta=document.querySelector('#propBody textarea');if(ta){ta.focus();ta.select();}
+}
+function editPoints(){
+  const p=new Set([0,total]);
+  for(const c of S.clips){p.add(r3(c._s));p.add(r3(c._e));}
+  for(const x of S.texts){p.add(r3(x.start));p.add(r3(x.start+x.dur));}
+  for(const a of S.audios){p.add(r3(a.start));p.add(r3(a.start+a.out-a.in));}
+  return [...p].sort((a,b)=>a-b);
+}
+const prevEdit=()=>{const p=editPoints().filter(x=>x<T-.01);setTime(p.length?p[p.length-1]:0);};
+const nextEdit=()=>{const p=editPoints().find(x=>x>T+.01);setTime(p??total);};
+
+// ---------- 元に戻す ----------
+const H={st:[],i:-1};
+const snapState=()=>JSON.stringify({clips:S.clips,texts:S.texts,audios:S.audios,set:S.set},(k,v)=>k[0]==='_'?undefined:v);
+function commit(){
+  const s=snapState();if(H.st[H.i]===s){updUI();return;}
+  H.st.splice(H.i+1);H.st.push(s);if(H.st.length>200) H.st.shift();H.i=H.st.length-1;updUI();
+}
+function restore(s){
+  const o=JSON.parse(s);S.clips=o.clips;S.texts=o.texts;S.audios=o.audios;S.set=o.set;
+  if(sel&&!selItem()) sel=null;
+  gcRt();syncSetUI();fitCanvas();refresh();
+}
+function undo(){if(H.i<=0) return;pause();H.i--;restore(H.st[H.i]);}
+function redo(){if(H.i>=H.st.length-1) return;pause();H.i++;restore(H.st[H.i]);}
+
+function live(){layout();renderTL();updUI();if(!playing) syncMedia(T,false);dirty=true;}
+function refresh(){layout();gcRt();renderTL();propsUI();updUI();if(!playing) syncMedia(T,false);dirty=true;}
+function updUI(){
+  $('bUndo').disabled=H.i<=0;$('bRedo').disabled=H.i>=H.st.length-1;
+  $('bExport').disabled=total<=0;$('bDel').disabled=$('bDup').disabled=!sel;
+  $('emptyHint').style.display=S.clips.length||S.texts.length?'none':'flex';
+  $('info').textContent=`${S.set.w}×${S.set.h} ・ ${S.set.fps}fps ・ 長さ ${fmt(total)} ・ 映像 ${S.clips.length} / テキスト ${S.texts.length} / 音声 ${S.audios.length}`;
+}
+
+// ---------- プロパティ ----------
+const HELP=`<div class="sec" style="border:0">使い方</div><ol class="help">
+<li>「開く」またはドラッグ＆ドロップで動画・音声・画像を追加（自動でタイムラインに並びます）</li>
+<li>クリップの端をドラッグでトリミング、中央をドラッグで並べ替え・移動</li>
+<li>再生位置で「分割」して、不要な部分を選んで「削除」</li>
+<li>クリップを選ぶと、ここで速度・音量・フェード・色などを調整できます</li>
+<li>テキストはプレビュー上でドラッグして移動できます</li>
+<li>「書き出し」で MP4 / WebM に保存</li></ol>
+<div class="sec">ショートカット</div><table class="keys">
+<tr><td>Space</td><td>再生 / 停止</td></tr><tr><td>S</td><td>再生位置で分割</td></tr><tr><td>Delete</td><td>選択中のクリップを削除</td></tr>
+<tr><td>Ctrl+D</td><td>複製</td></tr><tr><td>T</td><td>テキストを追加</td></tr><tr><td>← / →</td><td>1 フレーム移動（Shift で 1 秒）</td></tr>
+<tr><td>↑ / ↓</td><td>前 / 次の編集点へ</td></tr><tr><td>Home / End</td><td>先頭 / 末尾へ</td></tr><tr><td>Ctrl+Z / Ctrl+Y</td><td>元に戻す / やり直し</td></tr>
+<tr><td>Ctrl+ホイール</td><td>タイムラインのズーム</td></tr><tr><td>Ctrl+S</td><td>プロジェクト保存</td></tr><tr><td>Ctrl+E</td><td>書き出し</td></tr></table>`;
+function mkProps(b,it){
+  const row=(label,el)=>{const r=document.createElement('div');r.className='row';const s=document.createElement('span');s.textContent=label;r.append(s,el);b.append(r);return r;};
+  const inp=type=>{const i=document.createElement('input');i.type=type;return i;};
+  const after=fix=>{if(fix) fix();live();};
+  return {
+    title(a,s){const h=document.createElement('div');h.className='ptitle';const x=document.createElement('b');x.textContent=a;const y=document.createElement('small');y.textContent=s||'';h.append(x,y);b.append(h);},
+    sec(t){const h=document.createElement('div');h.className='sec';h.textContent=t;b.append(h);},
+    num(label,key,min,max,step,fix){
+      const i=inp('number');i.min=min;i.max=max;i.step=step;i.value=r3(it[key]);
+      i.oninput=()=>{if(i.value===''||isNaN(+i.value)) return;it[key]=clamp(+i.value,min,max);after(fix);};
+      i.onchange=()=>{i.value=r3(it[key]);commit();};
+      row(label,i);return i;
+    },
+    rng(label,key,min,max,step,fix){
+      const w=document.createElement('div');w.className='rng';
+      const r=inp('range');r.min=min;r.max=max;r.step=step;r.value=it[key];
+      const n=inp('number');n.min=min;n.max=max;n.step=step;n.value=r3(it[key]);
+      r.oninput=()=>{it[key]=+r.value;n.value=r.value;after(fix);};
+      n.oninput=()=>{if(n.value===''||isNaN(+n.value)) return;it[key]=clamp(+n.value,min,max);r.value=it[key];after(fix);};
+      r.onchange=n.onchange=()=>{n.value=r3(it[key]);commit();};
+      w.append(r,n);row(label,w);
+    },
+    sel(label,key,opts,fix){
+      const s=document.createElement('select');
+      for(const [v,t] of opts){const o=document.createElement('option');o.value=v;o.textContent=t;s.append(o);}
+      s.value=String(it[key]);const isNum=typeof opts[0][0]==='number';
+      s.onchange=()=>{it[key]=isNum?+s.value:s.value;after(fix);commit();};
+      row(label,s);return s;
+    },
+    chk(label,key){const c=inp('checkbox');c.checked=!!it[key];c.onchange=()=>{it[key]=c.checked;live();commit();};row(label,c);},
+    color(label,key){const c=inp('color');c.value=it[key];c.oninput=()=>{it[key]=c.value;live();};c.onchange=()=>commit();row(label,c);},
+    text(label,key){const t=document.createElement('textarea');t.rows=3;t.value=it[key];t.oninput=()=>{it[key]=t.value;live();};t.onchange=()=>commit();row(label,t);},
+    btns(list){const d=document.createElement('div');d.className='pbtns';for(const [t,f] of list){const x=document.createElement('button');x.textContent=t;x.onclick=f;d.append(x);}b.append(d);}
+  };
+}
+function propsUI(){
+  const b=$('propBody');b.textContent='';
+  const it=selItem();
+  if(!it){b.innerHTML=HELP;return;}
+  const P=mkProps(b,it),acts=[['分割 (S)',split],['複製',dup],['削除',del]];
+  if(sel.kind==='clip'){
+    const m=med(it.mid),img=m&&m.type==='image',md=m&&m.duration?m.duration:it.out;
+    P.title(img?'画像クリップ':'動画クリップ',m?m.name:'');
+    P.sec('時間');
+    if(img) P.num('表示時間(秒)','out',.1,36000,.1,()=>{it.in=0;});
+    else{
+      P.num('開始位置(秒)','in',0,md,.01,()=>{it.in=Math.min(it.in,it.out-.05);});
+      P.num('終了位置(秒)','out',0,md,.01,()=>{it.out=Math.max(it.out,it.in+.05);});
+      P.sel('速度','speed',[[.25,'0.25 倍'],[.5,'0.5 倍'],[.75,'0.75 倍'],[1,'等速'],[1.25,'1.25 倍'],[1.5,'1.5 倍'],[2,'2 倍'],[3,'3 倍'],[4,'4 倍'],[8,'8 倍']]);
+      P.sec('音声');
+      P.rng('音量(%)','vol',0,200,1);
+      P.chk('ミュート','mute');
+    }
+    P.sec('トランジション');
+    P.num('フェードイン(秒)','fadeIn',0,30,.1);
+    P.num('フェードアウト(秒)','fadeOut',0,30,.1);
+    if(S.clips.indexOf(it)>0) P.num('クロスフェード(秒)','xfade',0,10,.1);
+    P.sec('配置');
+    P.sel('表示方法','fit',[['contain','全体を表示'],['cover','画面を埋める'],['stretch','引き伸ばす']]);
+    P.rng('ズーム開始(%)','scale',10,400,1);
+    P.rng('ズーム終了(%)','scale2',10,400,1);
+    P.rng('位置 X(%)','ox',-100,100,1);
+    P.rng('位置 Y(%)','oy',-100,100,1);
+    P.sel('回転','rot',[[0,'0°'],[90,'90°'],[180,'180°'],[270,'270°']]);
+    P.chk('左右反転','flip');
+    P.sec('色・フィルター');
+    const ps=document.createElement('select');ps.innerHTML='<option value="">プリセットを選択…</option>'+Object.keys(PRESETS).map(k=>`<option>${k}</option>`).join('');
+    ps.onchange=()=>{if(!ps.value) return;Object.assign(it,PRESETS['なし'],PRESETS[ps.value]);commit();refresh();};
+    const pr=document.createElement('div');pr.className='row';const pl=document.createElement('span');pl.textContent='プリセット';pr.append(pl,ps);b.append(pr);
+    P.rng('明るさ','br',0,200,1);P.rng('コントラスト','ct',0,200,1);P.rng('彩度','sat',0,300,1);P.rng('色相','hue',-180,180,1);
+    P.rng('モノクロ','gray',0,100,1);P.rng('セピア','sepia',0,100,1);P.rng('ぼかし','blur',0,20,.5);
+  }else if(sel.kind==='text'){
+    P.title('テキスト','プレビュー上でドラッグして移動できます');
+    P.text('内容','text');
+    P.num('開始(秒)','start',0,36000,.01);P.num('長さ(秒)','dur',.1,36000,.1);
+    P.sec('文字');
+    P.sel('フォント','font',Object.entries(FONTS).map(([k,v])=>[k,v[0]]));
+    P.rng('サイズ','size',8,300,1);P.color('色','color');P.chk('太字','bold');P.chk('斜体','italic');
+    P.sel('揃え','align',[['left','左揃え'],['center','中央揃え'],['right','右揃え']]);
+    P.sec('縁取り・影・背景');
+    P.rng('縁取り','strokeW',0,20,.5);P.color('縁取りの色','stroke');P.chk('影','shadow');
+    P.chk('背景','bgOn');P.color('背景色','bg');P.rng('背景の濃さ(%)','bgA',0,100,1);
+    P.sec('位置');
+    P.rng('X(%)','x',0,100,.5);P.rng('Y(%)','y',0,100,.5);
+    P.sec('アニメーション');
+    P.sel('登場','anim',[['none','フェードのみ'],['up','下から'],['zoom','拡大'],['type','タイプライター']]);
+    P.num('フェードイン(秒)','fadeIn',0,10,.1);P.num('フェードアウト(秒)','fadeOut',0,10,.1);
+  }else{
+    const m=med(it.mid),md=m&&m.duration?m.duration:it.out;
+    P.title('音声クリップ',m?m.name:'');
+    P.sec('時間');
+    P.num('開始(秒)','start',0,36000,.01);
+    P.num('素材の開始位置(秒)','in',0,md,.01,()=>{it.in=Math.min(it.in,it.out-.05);});
+    P.num('素材の終了位置(秒)','out',0,md,.01,()=>{it.out=Math.max(it.out,it.in+.05);});
+    P.sec('音量');
+    P.rng('音量(%)','vol',0,200,1);
+    P.num('フェードイン(秒)','fadeIn',0,30,.1);P.num('フェードアウト(秒)','fadeOut',0,30,.1);
+  }
+  P.btns(acts);
+}
+
+// ---------- 設定 ----------
+function syncSetUI(){
+  const s=$('sRes'),v=`${S.set.w}x${S.set.h}`;s.textContent='';
+  const opts=RES.slice();if(!opts.some(o=>o[0]===v)) opts.push([v,`${S.set.w}×${S.set.h}`]);
+  for(const [k,t] of opts){const o=document.createElement('option');o.value=k;o.textContent=t;s.append(o);}
+  s.value=S.set.auto?'auto':v;
+  $('sFps').value=String(S.set.fps);$('cBg').value=S.set.bg;
+}
+$('sRes').onchange=e=>{
+  const v=e.target.value;
+  if(v==='auto'){S.set.auto=true;const m=S.clips.map(c=>med(c.mid)).find(m=>m&&m.w);if(m) applyAutoRes(m.w,m.h);}
+  else{const [w,h]=v.split('x').map(Number);S.set.w=w;S.set.h=h;S.set.auto=false;}
+  syncSetUI();fitCanvas();commit();refresh();
+};
+$('sFps').onchange=e=>{S.set.fps=+e.target.value;commit();updUI();};
+$('cBg').oninput=e=>{S.set.bg=e.target.value;dirty=true;};
+$('cBg').onchange=()=>commit();
+
+// ---------- 書き出し ----------
+const FMTS=[['video/mp4;codecs=avc3.640028,mp4a.40.2','MP4（H.264 / AAC）','mp4'],['video/mp4;codecs=avc3,mp4a.40.2','MP4（H.264 / AAC）','mp4'],['video/mp4;codecs=avc1.640028,mp4a.40.2','MP4（H.264 / AAC）','mp4'],['video/mp4;codecs=avc1.42E01F,mp4a.40.2','MP4（H.264 / AAC）','mp4'],['video/mp4;codecs=avc1,mp4a.40.2','MP4（H.264 / AAC）','mp4'],['video/mp4','MP4','mp4'],
+  ['video/webm;codecs=vp9,opus','WebM（VP9 / Opus）','webm'],['video/webm;codecs=vp8,opus','WebM（VP8 / Opus）','webm'],['video/webm;codecs=av1,opus','WebM（AV1 / Opus）','webm'],['video/webm','WebM','webm']];
+let FSUP=[];
+function openExport(){
+  if(total<=0||EXP) return;pause();
+  if(!window.MediaRecorder||!cv.captureStream){alert('このブラウザは動画の書き出しに対応していません。Chrome / Edge / Firefox の最新版をお使いください。');return;}
+  FSUP=[];const seen=new Set();
+  for(const [mime,label,ext] of FMTS){try{if(MediaRecorder.isTypeSupported(mime)&&!seen.has(label)){seen.add(label);FSUP.push({mime,label,ext});}}catch(e){}}
+  if(!FSUP.length){alert('書き出しに使える形式がありません');return;}
+  const s=$('eFmt');s.textContent='';FSUP.forEach((f,i)=>{const o=document.createElement('option');o.value=i;o.textContent=f.label;s.append(o);});
+  $('eNote').textContent=`出力：${S.set.w}×${S.set.h}・${S.set.fps}fps・長さ ${fmt(total)}。書き出しは実際の再生と同じだけ時間がかかります。完了までこのタブを前面に表示したままにしてください。`;
+  $('expForm').hidden=false;$('expRun').hidden=true;$('dlg').classList.add('on');
+}
+function closeDlg(){$('dlg').classList.remove('on');}
+async function startExport(){
+  const f=FSUP[+$('eFmt').value];if(!f) return;
+  const name=($('eName').value.trim()||'video').replace(/[\\/:*?"<>|]/g,'_');
+  audioInit();try{await AC.resume();}catch(e){}
+  layout();if(total<=0) return;
+  $('expForm').hidden=true;$('expRun').hidden=false;$('eBar').style.width='0';$('eTxt').textContent='準備中…';
+  const vs=cv.captureStream(S.set.fps);
+  const stream=new MediaStream([...vs.getVideoTracks(),...recDest.stream.getAudioTracks()]);
+  let rec;
+  try{rec=new MediaRecorder(stream,{mimeType:f.mime,videoBitsPerSecond:+$('eQ').value,audioBitsPerSecond:192000});}
+  catch(err){vs.getTracks().forEach(t=>t.stop());closeDlg();msg('書き出しを開始できませんでした: '+err.message,true);return;}
+  const chunks=[];rec.ondataavailable=ev=>{if(ev.data&&ev.data.size) chunks.push(ev.data);};
+  EXP={rec,chunks,f,name,vs,dur:total};
+  spk.gain.value=$('eMute').checked?0:masterVol;
+  T=0;syncMedia(0,false);
+  const t0=performance.now();
+  while(performance.now()-t0<8000&&!activeEls(0).every(el=>!el.seeking&&el.readyState>=2)) await new Promise(r=>setTimeout(r,50));
+  if(!EXP) return;
+  render(0);
+  rec.start(1000);play();
+}
+function finishExport(cancel){
+  const E=EXP;if(!E) return;EXP=null;
+  playing=false;syncMedia(T,false);updPlayBtn();spk.gain.value=masterVol;
+  E.rec.onstop=async()=>{
+    E.vs.getTracks().forEach(t=>t.stop());closeDlg();
+    if(cancel){msg('書き出しを中止しました');return;}
+    let blob=new Blob(E.chunks,{type:E.f.mime.split(';')[0]});
+    if(E.f.ext==='webm') blob=await fixWebm(blob,E.dur*1000);
+    download(blob,`${E.name}.${E.f.ext}`);
+    msg(`${E.name}.${E.f.ext} を書き出しました（${(blob.size/1048576).toFixed(1)} MB）`);
+  };
+  if(E.rec.state!=='inactive') E.rec.stop();else E.rec.onstop();
+}
+// MediaRecorder の WebM には長さ情報が無いので Segment Info に Duration を書き足す
+async function fixWebm(blob,ms){
+  try{
+    const head=new Uint8Array(await blob.slice(0,Math.min(blob.size,65536)).arrayBuffer());let p=0;
+    const rdId=()=>{const b=head[p];const len=b&0x80?1:b&0x40?2:b&0x20?3:b&0x10?4:0;if(!len) throw 0;let v=0;for(let i=0;i<len;i++) v=v*256+head[p+i];p+=len;return v;};
+    const rdSize=()=>{const b=head[p];let len=1,m=0x80;while(len<=8&&!(b&m)){len++;m>>=1;}if(len>8) throw 0;let v=b&(m-1),unk=v===m-1;for(let i=1;i<len;i++){v=v*256+head[p+i];if(head[p+i]!==255) unk=false;}const r={v,len,pos:p,unk};p+=len;return r;};
+    if(rdId()!==0x1A45DFA3) return blob;const hs=rdSize().v;p+=hs;
+    if(rdId()!==0x18538067) return blob;rdSize();
+    while(p<head.length-16){
+      const id=rdId(),sz=rdSize();
+      if(id===0x114D9B74) return blob;
+      if(id===0x1549A966){
+        const start=p,end=p+sz.v;let scale=1e6;
+        while(p<end){const cid=rdId(),cs=rdSize();if(cid===0x4489) return blob;if(cid===0x2AD7B1){scale=0;for(let i=0;i<cs.v;i++) scale=scale*256+head[p+i];}p+=cs.v;}
+        const dur=new Uint8Array(11);dur[0]=0x44;dur[1]=0x89;dur[2]=0x88;new DataView(dur.buffer).setFloat64(3,ms*1e6/scale);
+        const ns=sz.v+11;let len=sz.len;if(ns>=Math.pow(2,7*len)-1) len=8;
+        const sb=new Uint8Array(len);let v=ns;for(let i=len-1;i>=0;i--){sb[i]=v%256;v=Math.floor(v/256);}sb[0]|=0x80>>(len-1);
+        return new Blob([blob.slice(0,sz.pos),sb,blob.slice(start,end),dur,blob.slice(end)],{type:blob.type});
+      }
+      if(sz.unk) return blob;p+=sz.v;
+    }
+  }catch(e){}
+  return blob;
+}
+function download(blob,name){
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&EXP) msg('書き出し中はタブを前面に表示してください（裏に回すとコマ落ちします）',true);});
+
+// ---------- プロジェクト ----------
+function saveProject(){
+  const o={app:'video-editor',version:1,set:S.set,media:S.media.map(m=>({id:m.id,name:m.name,type:m.type,size:m.size,duration:m.duration,w:m.w,h:m.h,thumb:m.thumb})),clips:S.clips,texts:S.texts,audios:S.audios};
+  download(new Blob([JSON.stringify(o,(k,v)=>k[0]==='_'?undefined:v)],{type:'application/json'}),'video-project.json');
+  msg('プロジェクトを保存しました（素材ファイルは含まれません。同じ素材を「開く」で再リンクできます）');
+}
+async function openProject(f){
+  let o;try{o=JSON.parse(await f.text());}catch(e){o=null;}
+  if(!o||o.app!=='video-editor'){msg('プロジェクトファイルではありません',true);return;}
+  pause();for(const id of [...RT.keys()]) dropRt(id);
+  const old=S.media;
+  S.media=(o.media||[]).map(m=>{const hit=old.find(x=>x.url&&x.name===m.name&&x.size===m.size);return hit?Object.assign(hit,{id:m.id}):{...m,url:null,file:null};});
+  for(const m of old) if(!S.media.includes(m)&&m.url) URL.revokeObjectURL(m.url);
+  S.clips=o.clips||[];S.texts=o.texts||[];S.audios=o.audios||[];S.set=Object.assign({w:1280,h:720,fps:30,bg:'#000000',auto:false},o.set);
+  let mx=0;for(const x of [...S.media,...S.clips,...S.texts,...S.audios]){const n=parseInt(String(x.id).slice(1),10);if(n>mx) mx=n;}uid=mx+1;
+  sel=null;T=0;H.st=[];H.i=-1;commit();syncSetUI();fitCanvas();renderLib();refresh();
+  const miss=S.media.filter(m=>!m.url).length;
+  msg(miss?`プロジェクトを開きました。素材 ${miss} 件が未リンクです（「開く」で同じファイルを選ぶと自動で再リンクします）`:'プロジェクトを開きました',!!miss);
+}
+
+// ---------- UI 結線 ----------
+$('bOpen').onclick=()=>$('fOpen').click();
+$('fOpen').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(fs.length) addFiles(fs);};
+$('fRelink').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';const m=relinkTarget;relinkTarget=null;if(!f||!m) return;
+  audioInit();const type=kindOf(f);if(!type){msg('対応していないファイルです',true);return;}
+  m.file=f;m.url=URL.createObjectURL(f);m.type=type;m.name=f.name;m.size=f.size;m.loading=true;renderLib();
+  try{await probe(m);msg(`${f.name} を再リンクしました`);}catch(err){URL.revokeObjectURL(m.url);m.url=null;msg(`${f.name}: ${err.message}`,true);}
+  m.loading=false;renderLib();refresh();
+};
+$('bExport').onclick=openExport;
+$('eCancel').onclick=closeDlg;$('eStart').onclick=startExport;
+$('eAbort').onclick=()=>{if(EXP) finishExport(true);else closeDlg();};
+$('bUndo').onclick=undo;$('bRedo').onclick=redo;
+$('bSplit').onclick=split;$('bDel').onclick=del;$('bDup').onclick=dup;$('bText').onclick=addText;
+$('bSnap').onclick=()=>{render(T);cv.toBlob(b=>b&&download(b,`frame_${fmt(T).replace(/[:.]/g,'-')}.png`),'image/png');};
+$('bProjSave').onclick=saveProject;
+$('bProjOpen').onclick=()=>$('fProj').click();
+$('fProj').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f) openProject(f);};
+$('bPlay').onclick=toggle;
+$('bHome').onclick=()=>setTime(0);$('bEnd').onclick=()=>setTime(total);
+$('bBack').onclick=()=>setTime(T-1/S.set.fps);$('bFwd').onclick=()=>setTime(T+1/S.set.fps);
+$('bPrev').onclick=prevEdit;$('bNext').onclick=nextEdit;
+$('rMaster').oninput=e=>{masterVol=+e.target.value;if(spk&&!EXP) spk.gain.value=masterVol;};
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(b) b.blur();});
+
+let dragDepth=0;
+window.addEventListener('dragenter',e=>{if(hasFiles(e)){dragDepth++;$('drop').classList.add('on');}});
+window.addEventListener('dragleave',e=>{if(hasFiles(e)&&--dragDepth<=0){dragDepth=0;$('drop').classList.remove('on');}});
+window.addEventListener('dragover',e=>{if(hasFiles(e)||isMed(e)) e.preventDefault();});
+window.addEventListener('drop',e=>{
+  e.preventDefault();dragDepth=0;$('drop').classList.remove('on');
+  if(EXP) return;
+  if(e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]);else if(isMed(e)) mediaDrop(e);
+});
+
+document.addEventListener('keydown',e=>{
+  if($('dlg').classList.contains('on')){if(e.key==='Escape'&&!EXP) closeDlg();return;}
+  const typing=e.target.closest&&e.target.closest('input,textarea,select,[contenteditable]');
+  const ctrl=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();
+  if(ctrl&&k==='s'){e.preventDefault();saveProject();return;}
+  if(ctrl&&k==='e'){e.preventDefault();openExport();return;}
+  if(typing&&!(e.target.type==='range'&&(e.key===' '))) return;
+  if(ctrl&&!e.shiftKey&&k==='z'){e.preventDefault();undo();return;}
+  if(ctrl&&(k==='y'||(e.shiftKey&&k==='z'))){e.preventDefault();redo();return;}
+  if(ctrl&&k==='d'){e.preventDefault();dup();return;}
+  if(ctrl||e.altKey) return;
+  switch(e.key){
+    case ' ':e.preventDefault();toggle();break;
+    case 's':case 'S':split();break;
+    case 't':case 'T':e.preventDefault();addText();break;
+    case 'Delete':case 'Backspace':e.preventDefault();del();break;
+    case 'ArrowLeft':e.preventDefault();setTime(T-(e.shiftKey?1:1/S.set.fps));break;
+    case 'ArrowRight':e.preventDefault();setTime(T+(e.shiftKey?1:1/S.set.fps));break;
+    case 'ArrowUp':e.preventDefault();prevEdit();break;
+    case 'ArrowDown':e.preventDefault();nextEdit();break;
+    case 'Home':e.preventDefault();setTime(0);break;
+    case 'End':e.preventDefault();setTime(total);break;
+    case 'Escape':select(null);break;
+  }
+});
+// タイムラインの高さ変更
+$('split').addEventListener('pointerdown',e=>{
+  const w=$('tlWrap'),y0=e.clientY,h0=w.offsetHeight;$('split').setPointerCapture(e.pointerId);
+  const mv=ev=>{w.style.height=clamp(h0-(ev.clientY-y0),80,window.innerHeight*.7)+'px';};
+  const up=()=>{$('split').removeEventListener('pointermove',mv);$('split').removeEventListener('pointerup',up);};
+  $('split').addEventListener('pointermove',mv);$('split').addEventListener('pointerup',up);
+});
+window.addEventListener('beforeunload',e=>{if(S.media.length){e.preventDefault();e.returnValue='';}});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{RC=null;drawRuler();});
+new ResizeObserver(fitCanvas).observe($('view'));
+new ResizeObserver(()=>{renderTL();}).observe(tl);
+
+// ---------- 初期化 ----------
+syncSetUI();$('zoom').value=z2v(pps);renderLib();commit();refresh();fitCanvas();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
