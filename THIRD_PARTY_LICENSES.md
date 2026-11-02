@@ -3,6 +3,8 @@
 `xlsx-editor.html` には、以下のオープンソースライブラリが**改変せずに**埋め込まれています。
 各ライブラリの著作権は、それぞれの著作者に帰属します。
 
+`pptx-editor.html` にはサードパーティのライブラリは含まれていません（すべて本プロジェクトのコードで、MIT License です）。
+
 | ライブラリ | バージョン | 用途 | ライセンス | 配布元 |
 |---|---|---|---|---|
 | SheetJS Community Edition | 0.20.3 | xlsx / xls / csv の読み書き | Apache License 2.0 | https://sheetjs.com / https://git.sheetjs.com/sheetjs/sheetjs |
