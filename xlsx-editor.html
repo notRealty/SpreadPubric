@@ -110,6 +110,7 @@ body.touch #editor,body.touch #finput,body.touch dialog input,body.touch dialog 
   <span class="sep"></span>
   <button id="bRange" class="touch-only" title="タップしたセルまで選択範囲を広げる">範囲選択</button>
   <button id="bSum" title="オートSUM（Alt+=）">Σ 合計</button>
+  <button id="bBorder" title="選択範囲に罫線を引く">罫線</button>
   <button id="bChart" title="選択範囲からグラフを作成">グラフ</button>
   <button id="bImage" title="画像を挿入">画像</button>
   <button id="bCalc" title="F9：すべての数式を再計算">再計算</button>
@@ -1054,6 +1055,7 @@ function setBook(book, name, handle, pkg){
   if (!wb.SheetNames.length) XLSX.utils.book_append_sheet(wb, {'!ref':'A1'}, 'Sheet1');
   drawings = pkg ? pkg.map : new Map();
   srcPkg = pkg || null;
+  if (pkg && pkg.borders) for (const [sn, m] of pkg.borders) if (wb.Sheets[sn]) wb.Sheets[sn]['!borders'] = m;
   undoStack.length = 0; redoStack.length = 0; astCache.clear(); clip = null; sheetRenames = [];
   calcStats = {count:0, stale:new Set(), unsup:new Set(), circ:false};
   dirty = false; updateTitle();
@@ -1097,6 +1099,7 @@ function showSheet(name){
     const a = o.to || o.from;
     if (a){ nRows = Math.max(nRows, a.r + 25); nCols = Math.max(nCols, a.c + 8); }
   }
+  for (const a in wb.Sheets[name]['!borders'] || {}){ const p = XLSX.utils.decode_cell(a); nRows = Math.max(nRows, p.r + 21); nCols = Math.max(nCols, p.c + 6); }
   sel = {r:0, c:0}; corner = {r:0, c:0};
   render(); renderTabs(); renderObjs(); select(0, 0);
 }
@@ -1108,6 +1111,7 @@ function colWidth(ws, c){
 }
 function render(){
   const ws = wb.Sheets[cur], ri = ws['!rows'] || [];
+  const hasBd = !!ws['!borders'] && Object.keys(ws['!borders']).length > 0;
   const h = [];
   h.push('<colgroup><col style="width:48px">');
   for (let c = 0; c < nCols; c++) h.push(`<col style="width:${colWidth(ws, c)}px">`);
@@ -1118,11 +1122,12 @@ function render(){
     const x = ri[r], hp = x && !x.hidden && (x.hpx || (x.hpt && x.hpt * 4 / 3));
     h.push(`<tr${hp ? ` style="height:${Math.round(hp)}px"` : ''}><th>${r + 1}</th>`);
     for (let c = 0; c < nCols; c++){
-      const k = enc(r, c), cell = ws[k];
-      if (!cell){ h.push('<td></td>'); continue; }
+      const k = enc(r, c), cell = ws[k], bs = hasBd ? borderCss(ws, r, c) : '';
+      const st = bs ? ` style="${bs}"` : '';
+      if (!cell){ h.push(`<td${st}></td>`); continue; }
       const [t, cls] = display(cell);
       const cl = (cls + (calcStats.stale.has(cur + '!' + k) ? ' stale' : '')).trim();
-      h.push(`<td${cl ? ` class="${cl}"` : ''}>${esc(t)}</td>`);
+      h.push(`<td${cl ? ` class="${cl}"` : ''}${st}>${esc(t)}</td>`);
     }
     h.push('</tr>');
   }
@@ -1463,12 +1468,14 @@ function withSnap(withCells, fn){
 function undo(){
   commitAll(); const e = undoStack.pop(); if (!e) return; redoStack.push(e);
   if (e.kind === 'cells') applyOps([...e.ops].reverse(), 'old');
+  else if (e.kind === 'borders') applyBorderMap(e.sheet, e.before);
   else if (e.kind === 'rename') renameSheet(e.to, e.from);
   else restoreState(e.before);
 }
 function redo(){
   commitAll(); const e = redoStack.pop(); if (!e) return; undoStack.push(e);
   if (e.kind === 'cells') applyOps(e.ops, 'nu');
+  else if (e.kind === 'borders') applyBorderMap(e.sheet, e.after);
   else if (e.kind === 'rename') renameSheet(e.from, e.to);
   else restoreState(e.after);
 }
@@ -1554,6 +1561,102 @@ function autoSum(){
   if (f === '=SUM()') editor.setSelectionRange(5, 5);
 }
 
+/* ---------- 罫線 ---------- */
+// ws['!borders'] = {A1: {left, right, top, bottom}}。各辺は {style, color}（color は styles.xml の <color> の属性。省略時は自動）
+const SIDES = ['left', 'right', 'top', 'bottom'];
+const OPP = {left:'right', right:'left', top:'bottom', bottom:'top'};
+const NB = {left:[0, -1], right:[0, 1], top:[-1, 0], bottom:[1, 0]};
+const bordersOf = ws => ws['!borders'] || (ws['!borders'] = {});
+const getBd = (ws, r, c) => (r >= 0 && c >= 0 && ws['!borders'] && ws['!borders'][enc(r, c)]) || {};
+const bdWeight = s => !s ? 0 : s.style === 'thick' || s.style === 'double' ? 3 : /^(medium|slantDashDot)/.test(s.style) ? 2 : 1;
+const bdColor = s => { const rgb = s.color && s.color.rgb; return !rgb || /^(FF)?000000$/i.test(rgb) ? 'var(--fg)' : '#' + rgb.slice(-6); };
+// 隣り合うセルの向かい合う辺は太いほうを表示する
+const heavier = (a, b) => bdWeight(b) > bdWeight(a) ? b : a;
+function borderCss(ws, r, c){
+  const b = getBd(ws, r, c), css = [], sh = [];
+  // 右・下はセルの境界線（1px）の色を変え、太さの残りは内側の影で描く。上・左（先頭行・先頭列のみ）は影だけで描く
+  const edge = (s, dx, dy, prop) => {
+    if (!s) return;
+    const col = bdColor(s), off = prop ? 1 : 0, at = n => `inset ${dx * n}px ${dy * n}px 0`;
+    if (prop) css.push(`${prop}:${col}`);
+    if (s.style === 'double'){ for (let d = off + 1; d <= 3; d++) sh.push(`${at(d - off)} ${d === 2 ? 'var(--bg)' : col}`); }
+    else if (bdWeight(s) > off) sh.push(`${at(bdWeight(s) - off)} ${col}`);
+  };
+  edge(heavier(b.right, getBd(ws, r, c + 1).left), -1, 0, 'border-right-color');
+  edge(heavier(b.bottom, getBd(ws, r + 1, c).top), 0, -1, 'border-bottom-color');
+  if (r === 0) edge(b.top, 0, 1);
+  if (c === 0) edge(b.left, 1, 0);
+  if (sh.length) css.push('box-shadow:' + sh.join(','));
+  return css.join(';');
+}
+function paintBorders(rg){
+  const ws = wb.Sheets[cur];
+  for (let r = Math.max(0, rg.s.r - 1); r <= Math.min(rg.e.r + 1, nRows - 1); r++)
+    for (let c = Math.max(0, rg.s.c - 1); c <= Math.min(rg.e.c + 1, nCols - 1); c++) td(r, c).style.cssText = borderCss(ws, r, c);
+}
+const BORDER_MENU = [
+  {label:'格子（すべての罫線）', kind:'all', style:'thin'},
+  {label:'外枠', kind:'outline', style:'thin'},
+  {label:'太い外枠', kind:'outline', style:'medium'},
+  {label:'内側の罫線', kind:'inside', style:'thin'},
+  '-',
+  {label:'上罫線', kind:'top', style:'thin'},
+  {label:'下罫線', kind:'bottom', style:'thin'},
+  {label:'左罫線', kind:'left', style:'thin'},
+  {label:'右罫線', kind:'right', style:'thin'},
+  {label:'下太罫線', kind:'bottom', style:'medium'},
+  {label:'下二重罫線', kind:'bottom', style:'double'},
+  '-',
+  {label:'罫線なし', kind:'none'},
+];
+function setBorders(kind, style){
+  commitAll();
+  const rg = selRect(), ws = wb.Sheets[cur];
+  if ((rg.e.r - rg.s.r + 1) * (rg.e.c - rg.s.c + 1) > 100000){ setStatus('範囲が広すぎるため罫線を変更できません', true); return; }
+  const all = bordersOf(ws), before = {};
+  const inR = (r, c) => r >= rg.s.r && r <= rg.e.r && c >= rg.s.c && c <= rg.e.c;
+  const put = (r, c, side, v) => {
+    if (r < 0 || c < 0) return;
+    const a = enc(r, c), b = {...(all[a] || {})};
+    if (!(a in before)) before[a] = all[a] ? {...all[a]} : null;
+    if (v) b[side] = {style:v}; else delete b[side];
+    if (SIDES.some(s => b[s])) all[a] = b; else delete all[a];
+  };
+  for (let r = rg.s.r; r <= rg.e.r; r++) for (let c = rg.s.c; c <= rg.e.c; c++){
+    for (const side of SIDES){
+      const [dr, dc] = NB[side], outer = !inR(r + dr, c + dc);
+      const hit = kind === 'all' || kind === 'none' || (kind === 'outline' && outer) || (kind === 'inside' && !outer) || (kind === side && outer);
+      if (!hit) continue;
+      put(r, c, side, kind === 'none' ? null : style);
+      // 範囲外の隣のセルが持つ向かい合う辺は消して、新しい罫線だけが表示されるようにする
+      if (outer) put(r + dr, c + dc, OPP[side], null);
+    }
+  }
+  const after = {};
+  for (const a in before){
+    const v = all[a] ? {...all[a]} : null;
+    if (JSON.stringify(v) === JSON.stringify(before[a])) delete before[a]; else after[a] = v;
+  }
+  if (!Object.keys(after).length) return;
+  undoStack.push({kind:'borders', sheet:cur, before, after}); redoStack.length = 0;
+  paintBorders(rg);
+  markDirty();
+  setStatus(kind === 'none' ? '罫線を消しました' : '罫線を引きました');
+}
+function applyBorderMap(sheet, map){
+  if (sheet !== cur) showSheet(sheet);
+  const all = bordersOf(wb.Sheets[cur]);
+  let rg = null;
+  for (const a in map){
+    if (map[a]) all[a] = {...map[a]}; else delete all[a];
+    const p = XLSX.utils.decode_cell(a);
+    if (!rg) rg = {s:{...p}, e:{...p}};
+    rg.s.r = Math.min(rg.s.r, p.r); rg.s.c = Math.min(rg.s.c, p.c); rg.e.r = Math.max(rg.e.r, p.r); rg.e.c = Math.max(rg.e.c, p.c);
+  }
+  if (rg) paintBorders(rg);
+  markDirty();
+}
+
 /* ---------- 行・列の挿入と削除 ---------- */
 function structOp(axis, k, n){
   commitAll();
@@ -1570,6 +1673,16 @@ function structOp(axis, k, n){
     let mr = 0, mc = 0;
     for (const [a, cell] of moved){ ws[a] = cell; const p = XLSX.utils.decode_cell(a); mr = Math.max(mr, p.r); mc = Math.max(mc, p.c); }
     ws['!ref'] = moved.length ? XLSX.utils.encode_range({s:{r:0, c:0}, e:{r:mr, c:mc}}) : 'A1';
+    if (ws['!borders']){
+      const nb = {};
+      for (const a in ws['!borders']){
+        const p = XLSX.utils.decode_cell(a), v = p[axis];
+        if (n < 0 && v >= k && v < k - n) continue;
+        if (v >= k) p[axis] = v + n;
+        nb[enc(p.r, p.c)] = ws['!borders'][a];
+      }
+      ws['!borders'] = nb;
+    }
     const dim = axis === 'c' ? '!cols' : '!rows';
     if (ws[dim]){ if (n > 0) ws[dim].splice(k, 0, ...new Array(n)); else ws[dim].splice(k, -n); }
     if (ws['!merges']) ws['!merges'] = ws['!merges'].map(m => {
@@ -2199,17 +2312,44 @@ async function sheetPaths(zip){
 }
 const readMarker = m => ({c:+kid(m, 'col').textContent, cOff:+kid(m, 'colOff').textContent, r:+kid(m, 'row').textContent, rOff:+kid(m, 'rowOff').textContent});
 
+async function stylesPath(zip){
+  const root = await readRels(zip, '');
+  const wbRel = Object.values(root).find(r => r.type === REL.office);
+  const rel = Object.values(await readRels(zip, wbRel ? wbRel.target : 'xl/workbook.xml')).find(r => r.type === NS.r + '/styles');
+  return rel ? rel.target : null;
+}
+function readBorder(el){
+  const b = {};
+  for (const n of SIDES){
+    const s = kid(el, n), st = s && s.getAttribute('style');
+    if (!st || st === 'none') continue;
+    const col = kid(s, 'color');
+    b[n] = {style:st};
+    if (col && col.attributes.length && col.getAttribute('auto') !== '1' && col.getAttribute('indexed') !== '64')
+      b[n].color = Object.fromEntries([...col.attributes].map(x => [x.name, x.value]));
+  }
+  return Object.keys(b).length ? b : null;
+}
 async function loadPackage(data){
-  const zip = await JSZip.loadAsync(data), map = new Map();
+  const zip = await JSZip.loadAsync(data), map = new Map(), borders = new Map();
   const ct = await xmlDoc(zip, '[Content_Types].xml');
+  // セルの書式番号 → 罫線（SheetJS は罫線を読まないので styles.xml から拾う）
+  const sp = await stylesPath(zip), sty = sp && await xmlDoc(zip, sp);
+  const bList = sty ? kids(kid(sty.documentElement, 'borders'), 'border').map(readBorder) : [];
+  const xfBd = sty ? kids(kid(sty.documentElement, 'cellXfs'), 'xf').map(x => bList[+x.getAttribute('borderId') || 0] || null) : [];
   for (const [name, sPath] of await sheetPaths(zip)){
     const sDoc = await xmlDoc(zip, sPath); if (!sDoc) continue;
+    if (xfBd.some(Boolean)){
+      const m = {};
+      for (const c of sDoc.getElementsByTagNameNS(NS.main, 'c')){ const b = xfBd[+c.getAttribute('s') || 0], a = c.getAttribute('r'); if (b && a) m[a] = b; }
+      if (Object.keys(m).length) borders.set(name, m);
+    }
     const dEl = sDoc.getElementsByTagNameNS(NS.main, 'drawing')[0]; if (!dEl) continue;
     const dRel = (await readRels(zip, sPath))[dEl.getAttributeNS(NS.r, 'id')];
     if (!dRel || !zip.file(dRel.target)) continue;
     map.set(name, await loadDrawing(zip, dRel.target));
   }
-  return {zip, ct, map};
+  return {zip, ct, map, borders};
 }
 async function loadDrawing(zip, dPath){
   const doc = await xmlDoc(zip, dPath), rels = await readRels(zip, dPath), root = doc.documentElement, objs = [];
@@ -2387,6 +2527,74 @@ async function injectDrawings(data){
   return await zip.generateAsync({type:'uint8array', compression:'DEFLATE'});
 }
 
+/* ---------- 罫線の書き込み（SheetJS が出力した xlsx の styles.xml とシートに追記する） ---------- */
+const hasBorders = () => wb.SheetNames.some(sn => { const b = wb.Sheets[sn]['!borders']; return !!b && Object.keys(b).length > 0; });
+function borderXml(b){
+  const side = n => {
+    const s = b[n]; if (!s) return `<${n}/>`;
+    const col = s.color ? '<color ' + Object.entries(s.color).map(([k, v]) => `${k}="${escX(v)}"`).join(' ') + '/>' : '<color indexed="64"/>';
+    return `<${n} style="${escX(s.style)}">${col}</${n}>`;
+  };
+  return `<border>${SIDES.map(side).join('')}<diagonal/></border>`;
+}
+async function injectBorders(data){
+  const zip = await JSZip.loadAsync(data), paths = await sheetPaths(zip), ser = new XMLSerializer();
+  const sp = await stylesPath(zip), sty = sp && await xmlDoc(zip, sp);
+  if (!sty) return data;
+  const ss = sty.documentElement, frag = s => sty.importNode(new DOMParser().parseFromString(`<x xmlns="${NS.main}">${s}</x>`, 'application/xml').documentElement.firstElementChild, true);
+  let bEl = kid(ss, 'borders'), xEl = kid(ss, 'cellXfs');
+  if (!bEl){ bEl = frag('<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'); ss.insertBefore(bEl, kid(ss, 'cellStyleXfs') || kid(ss, 'cellXfs') || null); }
+  if (!xEl){ xEl = frag('<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'); const st = kid(ss, 'cellStyleXfs'); ss.insertBefore(xEl, st ? st.nextElementSibling : null); }
+  const xfs = kids(xEl, 'xf'), bIdx = new Map(), xIdx = new Map();
+  const borderId = b => {
+    const x = borderXml(b);
+    if (!bIdx.has(x)){ bEl.appendChild(frag(x)); bIdx.set(x, kids(bEl, 'border').length - 1); }
+    return bIdx.get(x);
+  };
+  // 元の書式（表示形式など）を複製して罫線だけ差し替える
+  const xfId = (base, b) => {
+    const bid = borderId(b), key = base + ':' + bid;
+    if (!xIdx.has(key)){
+      const el = (xfs[base] || xfs[0]).cloneNode(true);
+      el.setAttribute('borderId', bid); el.setAttribute('applyBorder', '1');
+      xEl.appendChild(el); xIdx.set(key, kids(xEl, 'xf').length - 1);
+    }
+    return xIdx.get(key);
+  };
+  for (const sn of wb.SheetNames){
+    const all = wb.Sheets[sn]['!borders'], sPath = paths.get(sn);
+    if (!all || !sPath || !Object.keys(all).length) continue;
+    const doc = await xmlDoc(zip, sPath), sd = doc && doc.getElementsByTagNameNS(NS.main, 'sheetData')[0];
+    if (!sd) continue;
+    const rows = new Map(kids(sd, 'row').map(r => [+r.getAttribute('r'), r]));
+    const dimEl = doc.getElementsByTagNameNS(NS.main, 'dimension')[0];
+    const dim = XLSX.utils.decode_range(dimEl && dimEl.getAttribute('ref') || 'A1');
+    for (const a in all){
+      const b = all[a]; if (!SIDES.some(s => b[s])) continue;
+      const p = XLSX.utils.decode_cell(a), rn = p.r + 1;
+      let row = rows.get(rn);
+      if (!row){
+        row = doc.createElementNS(NS.main, 'row'); row.setAttribute('r', rn);
+        sd.insertBefore(row, kids(sd, 'row').find(x => +x.getAttribute('r') > rn) || null); rows.set(rn, row);
+      }
+      row.removeAttribute('spans');
+      let c = kids(row, 'c').find(x => x.getAttribute('r') === a);
+      if (!c){
+        c = doc.createElementNS(NS.main, 'c'); c.setAttribute('r', a);
+        row.insertBefore(c, kids(row, 'c').find(x => XLSX.utils.decode_cell(x.getAttribute('r')).c > p.c) || null);
+      }
+      c.setAttribute('s', xfId(+c.getAttribute('s') || 0, b));
+      dim.s.r = Math.min(dim.s.r, p.r); dim.s.c = Math.min(dim.s.c, p.c); dim.e.r = Math.max(dim.e.r, p.r); dim.e.c = Math.max(dim.e.c, p.c);
+    }
+    if (dimEl) dimEl.setAttribute('ref', XLSX.utils.encode_range(dim));
+    zip.file(sPath, XML_DECL + ser.serializeToString(doc).replace(/^<\?xml[^>]*\?>\s*/, ''));
+  }
+  bEl.setAttribute('count', kids(bEl, 'border').length);
+  xEl.setAttribute('count', kids(xEl, 'xf').length);
+  zip.file(sp, XML_DECL + ser.serializeToString(sty).replace(/^<\?xml[^>]*\?>\s*/, ''));
+  return await zip.generateAsync({type:'uint8array', compression:'DEFLATE'});
+}
+
 /* ---------- グラフの XML（自作グラフ用） ---------- */
 function chartXml(spec, sn){
   const g = spec.groups[0], A1 = 500100001, A2 = 500100002;
@@ -2477,10 +2685,12 @@ function confirmLossy(type){
   const lost = [];
   if (hasFormulas()) lost.push('数式（計算結果の値だけが残ります）');
   if (hasObjs()) lost.push('画像・グラフ');
+  if (hasBorders()) lost.push('罫線');
   return !lost.length || confirm('xls（Excel 97-2003）形式では次の内容を保存できません。\n・' + lost.join('\n・') + '\n\n残したい場合は xlsx で保存してください。xls で保存しますか？');
 }
 async function buildFile(type){
-  const data = new Uint8Array(XLSX.write(wb, {...writeOpts(type), type:'array'}));
+  let data = new Uint8Array(XLSX.write(wb, {...writeOpts(type), type:'array'}));
+  if (type !== 'biff8' && hasBorders()) data = await injectBorders(data);
   return type !== 'biff8' && hasObjs() ? await injectDrawings(data) : data;
 }
 const SAVE_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -2544,6 +2754,10 @@ $('#bUndo').onclick = () => { undo(); focusGrid(); };
 $('#bRedo').onclick = () => { redo(); focusGrid(); };
 $('#bCalc').onclick = () => { recalcAll(); focusGrid(); };
 $('#bSum').onclick = () => autoSum();
+$('#bBorder').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showMenu(r.left, r.bottom + 2, BORDER_MENU.map(it => it === '-' ? it : {label:it.label, fn:() => setBorders(it.kind, it.style)}));
+};
 $('#bChart').onclick = () => openChartDialog(null);
 $('#bImage').onclick = () => $('#imgFile').click();
 $('#addSheet').onclick = addSheet;
