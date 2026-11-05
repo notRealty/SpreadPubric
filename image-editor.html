@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画像 ローカルエディタ</title>
+<!--
+  画像 ローカルエディタ (image-editor.html)
+  - ブラウザのみで動作（ネットワーク通信なし・外部ライブラリなし）
+  - すべてブラウザ標準 API のみで実装（MIT License として自由にご利用可能）
+-->
+<style>
+  :root {
+    --bg-dark: #1e1e24;
+    --bg-panel: #2b2b36;
+    --bg-control: #383846;
+    --accent: #4f8cff;
+    --accent-hover: #3a75e6;
+    --danger: #ff5c5c;
+    --text-main: #f0f0f5;
+    --text-sub: #a5a5b8;
+    --border: #444454;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* Header */
+  header {
+    background-color: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    flex-shrink: 0;
+  }
+
+  .brand {
+    font-size: 16px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  button, .btn-label {
+    background-color: var(--bg-control);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  button:hover:not(:disabled), .btn-label:hover {
+    background-color: #48485a;
+    border-color: #5c5c70;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  button.primary, .btn-label.primary {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  button.primary:hover:not(:disabled), .btn-label.primary:hover {
+    background-color: var(--accent-hover);
+  }
+
+  button.active {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  button.danger {
+    background-color: rgba(255, 92, 92, 0.15);
+    border-color: var(--danger);
+    color: #ff8080;
+  }
+
+  button.danger:hover:not(:disabled) {
+    background-color: var(--danger);
+    color: #fff;
+  }
+
+  input[type="file"] {
+    display: none;
+  }
+
+  /* Main Layout */
+  .workspace {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* Sidebar Controls */
+  .sidebar {
+    width: 310px;
+    background-color: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background-color: #23232c;
+  }
+
+  .tab-btn {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 12px 6px;
+    font-size: 12px;
+    color: var(--text-sub);
+    border-bottom: 2px solid transparent;
+  }
+
+  .tab-btn.active {
+    background: transparent;
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+    font-weight: 600;
+  }
+
+  .tab-content {
+    display: none;
+    padding: 16px;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .tab-content.active {
+    display: flex;
+  }
+
+  .section-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-sub);
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .control-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+  }
+
+  .control-value {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    background: var(--bg-control);
+    border-radius: 3px;
+    outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+
+  .input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  input[type="number"], input[type="text"], select {
+    background-color: var(--bg-control);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 7px 10px;
+    border-radius: 5px;
+    font-size: 13px;
+    width: 100%;
+  }
+
+  input[type="color"] {
+    -webkit-appearance: none;
+    border: 1px solid var(--border);
+    width: 40px;
+    height: 34px;
+    border-radius: 5px;
+    background: none;
+    cursor: pointer;
+    padding: 2px;
+  }
+
+  /* Canvas Area */
+  .canvas-area {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 24px;
+    background-image:
+      linear-gradient(45deg, #25252e 25%, transparent 25%),
+      linear-gradient(-45deg, #25252e 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #25252e 75%),
+      linear-gradient(-45deg, transparent 75%, #25252e 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+
+  .canvas-wrapper {
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    display: none;
+    line-height: 0;
+  }
+
+  canvas {
+    max-width: 100%;
+    max-height: calc(100vh - 130px);
+    object-fit: contain;
+    display: block;
+  }
+
+  #overlayCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: auto;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: var(--text-sub);
+    padding: 40px;
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    background: rgba(43, 43, 54, 0.6);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .empty-state:hover, .empty-state.dragover {
+    border-color: var(--accent);
+    background: rgba(79, 140, 255, 0.08);
+  }
+
+  .empty-state h2 {
+    font-size: 18px;
+    margin-bottom: 8px;
+    color: var(--text-main);
+  }
+
+  .empty-state p {
+    font-size: 13px;
+  }
+
+  /* Status Bar */
+  .statusbar {
+    height: 30px;
+    background-color: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-sub);
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span>🎨 ローカル画像エディタ</span>
+  </div>
+  <div class="header-actions">
+    <label class="btn-label primary" for="fileInput">📂 画像を開く</label>
+    <input type="file" id="fileInput" accept="image/*">
+    <button id="undoBtn" disabled title="元に戻す (Ctrl+Z)">↩ 元に戻す</button>
+    <button id="redoBtn" disabled title="やり直す (Ctrl+Y)">↪ やり直す</button>
+    <button id="resetBtn" class="danger" disabled>🔄 初期状態に戻す</button>
+    <select id="exportFormat" style="width: auto;">
+      <option value="image/png">PNG形式</option>
+      <option value="image/jpeg">JPEG形式</option>
+      <option value="image/webp">WebP形式</option>
+    </select>
+    <button id="downloadBtn" class="primary" disabled>💾 保存</button>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside class="sidebar">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="adjust">色調・補正</button>
+      <button class="tab-btn" data-tab="transform">変形・切抜</button>
+      <button class="tab-btn" data-tab="draw">描画・文字</button>
+    </div>
+
+    <!-- 色調・フィルタータブ -->
+    <div class="tab-content active" id="tab-adjust">
+      <div>
+        <div class="section-title">基本補正</div>
+        <div class="control-group">
+          <div class="control-header"><span>明るさ (Brightness)</span><span class="control-value" id="val-brightness">100%</span></div>
+          <input type="range" id="brightness" min="0" max="200" value="100">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>コントラスト (Contrast)</span><span class="control-value" id="val-contrast">100%</span></div>
+          <input type="range" id="contrast" min="0" max="200" value="100">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>彩度 (Saturate)</span><span class="control-value" id="val-saturate">100%</span></div>
+          <input type="range" id="saturate" min="0" max="200" value="100">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>色相 (Hue)</span><span class="control-value" id="val-hue">0°</span></div>
+          <input type="range" id="hue" min="-180" max="180" value="0">
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">エフェクト</div>
+        <div class="control-group">
+          <div class="control-header"><span>グレースケール</span><span class="control-value" id="val-grayscale">0%</span></div>
+          <input type="range" id="grayscale" min="0" max="100" value="0">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>セピア</span><span class="control-value" id="val-sepia">0%</span></div>
+          <input type="range" id="sepia" min="0" max="100" value="0">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>階調反転 (Invert)</span><span class="control-value" id="val-invert">0%</span></div>
+          <input type="range" id="invert" min="0" max="100" value="0">
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>ぼかし (Blur)</span><span class="control-value" id="val-blur">0px</span></div>
+          <input type="range" id="blur" min="0" max="20" value="0" step="0.5">
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <button id="applyFilterBtn" class="primary">補正を確定</button>
+        <button id="resetFilterBtn">スライダー初期化</button>
+      </div>
+    </div>
+
+    <!-- 変形・切り抜きタブ -->
+    <div class="tab-content" id="tab-transform">
+      <div>
+        <div class="section-title">回転・反転</div>
+        <div class="grid-2">
+          <button id="rotLeftBtn">↺ 左へ90°回転</button>
+          <button id="rotRightBtn">↻ 右へ90°回転</button>
+          <button id="flipHBtn">↔ 左右反転</button>
+          <button id="flipVBtn">↕ 上下反転</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">トリミング (切り抜き)</div>
+        <p style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">
+          開始ボタンを押してキャンバス上をドラッグし、範囲を選択してください。
+        </p>
+        <div class="grid-2">
+          <button id="startCropBtn">✂ 範囲選択開始</button>
+          <button id="applyCropBtn" class="primary" disabled>切り抜き実行</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">リサイズ (サイズ変更)</div>
+        <div class="control-group">
+          <div class="input-row">
+            <div style="flex:1;">
+              <label style="font-size:11px; color:var(--text-sub);">幅 (px)</label>
+              <input type="number" id="resizeW" min="1" max="10000">
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:11px; color:var(--text-sub);">高さ (px)</label>
+              <input type="number" id="resizeH" min="1" max="10000">
+            </div>
+          </div>
+          <label style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:4px; cursor:pointer;">
+            <input type="checkbox" id="keepAspect" checked> 縦横比を維持する
+          </label>
+          <button id="applyResizeBtn" class="primary" style="margin-top:6px;">サイズ変更を適用</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 描画・テキストタブ -->
+    <div class="tab-content" id="tab-draw">
+      <div>
+        <div class="section-title">ツール選択</div>
+        <div class="grid-3">
+          <button class="tool-btn active" data-tool="none">✋ なし</button>
+          <button class="tool-btn" data-tool="pen">✏ ペン</button>
+          <button class="tool-btn" data-tool="rect">▭ 四角形</button>
+          <button class="tool-btn" data-tool="mosaic">▦ モザイク</button>
+          <button class="tool-btn" data-tool="text">Ｔ 文字追加</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">描画スタイル</div>
+        <div class="control-group">
+          <div class="input-row">
+            <span style="font-size:13px; width:70px;">カラー:</span>
+            <input type="color" id="drawColor" value="#ff3b3b">
+          </div>
+        </div>
+        <div class="control-group" style="margin-top:12px;">
+          <div class="control-header"><span>太さ / サイズ</span><span class="control-value" id="val-brushSize">8px</span></div>
+          <input type="range" id="brushSize" min="1" max="80" value="8">
+        </div>
+      </div>
+
+      <div id="textToolPanel" style="display:none;">
+        <div class="section-title">テキスト挿入</div>
+        <p style="font-size:12px; color:var(--text-sub); margin-bottom:8px;">
+          テキストを入力後、画像上の配置したい場所をクリックしてください。
+        </p>
+        <input type="text" id="textInput" placeholder="ここに入力..." value="サンプルテキスト">
+      </div>
+    </div>
+  </aside>
+
+  <main class="canvas-area" id="dropZone">
+    <div class="empty-state" id="emptyState">
+      <h2>画像をドラッグ＆ドロップ</h2>
+      <p>またはクリックしてファイルを選択してください (PNG / JPEG / WebP / GIF)</p>
+    </div>
+    <div class="canvas-wrapper" id="canvasWrapper">
+      <canvas id="mainCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+    </div>
+  </main>
+</div>
+
+<footer class="statusbar">
+  <span id="statusText">画像が読み込まれていません</span>
+  <span id="imageInfo">-</span>
+</footer>
+
+<script>
+(() => {
+  const fileInput = document.getElementById('fileInput');
+  const dropZone = document.getElementById('dropZone');
+  const emptyState = document.getElementById('emptyState');
+  const canvasWrapper = document.getElementById('canvasWrapper');
+  const mainCanvas = document.getElementById('mainCanvas');
+  const ctx = mainCanvas.getContext('2d');
+  const overlayCanvas = document.getElementById('overlayCanvas');
+  const octx = overlayCanvas.getContext('2d');
+
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const exportFormat = document.getElementById('exportFormat');
+  const statusText = document.getElementById('statusText');
+  const imageInfo = document.getElementById('imageInfo');
+
+  // State
+  let originalImage = null;
+  let fileName = 'edited_image';
+  let history = [];
+  let historyIndex = -1;
+  const MAX_HISTORY = 25;
+
+  let currentTool = 'none'; // none, crop, pen, rect, mosaic, text
+  let isPointerDown = false;
+  let startX = 0, startY = 0;
+  let cropRect = null;
+  let aspectRatio = 1;
+
+  // Filter Sliders
+  const filterIds = ['brightness', 'contrast', 'saturate', 'hue', 'grayscale', 'sepia', 'invert', 'blur'];
+  const filters = {
+    brightness: 100, contrast: 100, saturate: 100, hue: 0,
+    grayscale: 0, sepia: 0, invert: 0, blur: 0
+  };
+
+  // Tabs
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      setTool('none');
+    });
+  });
+
+  // File loading
+  emptyState.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    if (e.target.files && e.target.files[0]) loadFile(e.target.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    emptyState.classList.add('dragover');
+  });
+  dropZone.addEventListener('dragleave', () => emptyState.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    emptyState.classList.remove('dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      loadFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  // Clipboard paste support
+  window.addEventListener('paste', e => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) loadFile(file);
+        break;
+      }
+    }
+  });
+
+  function loadFile(file) {
+    if (!file.type.startsWith('image/')) {
+      alert('画像ファイルを選択してください。');
+      return;
+    }
+    fileName = (file.name || 'image').replace(/\.[^/.]+$/, "");
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        originalImage = img;
+        initCanvas(img);
+        statusText.textContent = `読み込み完了: ${file.name || 'クリップボード画像'}`;
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function initCanvas(img) {
+    emptyState.style.display = 'none';
+    canvasWrapper.style.display = 'inline-block';
+    mainCanvas.width = overlayCanvas.width = img.width;
+    mainCanvas.height = overlayCanvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    resetFilterSliders();
+    history = [];
+    historyIndex = -1;
+    pushHistory();
+    updateUI();
+  }
+
+  function pushHistory() {
+    if (historyIndex < history.length - 1) {
+      history = history.slice(0, historyIndex + 1);
+    }
+    history.push(mainCanvas.toDataURL('image/png'));
+    if (history.length > MAX_HISTORY) {
+      history.shift();
+    } else {
+      historyIndex++;
+    }
+    updateUI();
+  }
+
+  function restoreHistory(index) {
+    const img = new Image();
+    img.onload = () => {
+      mainCanvas.width = overlayCanvas.width = img.width;
+      mainCanvas.height = overlayCanvas.height = img.height;
+      ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+      ctx.drawImage(img, 0, 0);
+      resetFilterSliders();
+      updateUI();
+    };
+    img.src = history[index];
+  }
+
+  undoBtn.addEventListener('click', () => {
+    if (historyIndex > 0) {
+      historyIndex--;
+      restoreHistory(historyIndex);
+    }
+  });
+
+  redoBtn.addEventListener('click', () => {
+    if (historyIndex < history.length - 1) {
+      historyIndex++;
+      restoreHistory(historyIndex);
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    if (originalImage && confirm('すべての編集を破棄して初期状態に戻しますか？')) {
+      initCanvas(originalImage);
+    }
+  });
+
+  // Keyboard shortcuts
+  window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) redoBtn.click();
+      else undoBtn.click();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      redoBtn.click();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      if (!downloadBtn.disabled) downloadBtn.click();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  function updateUI() {
+    const hasImg = historyIndex >= 0;
+    undoBtn.disabled = historyIndex <= 0;
+    redoBtn.disabled = historyIndex >= history.length - 1;
+    resetBtn.disabled = !hasImg;
+    downloadBtn.disabled = !hasImg;
+
+    if (hasImg) {
+      imageInfo.textContent = `${mainCanvas.width} × ${mainCanvas.height} px`;
+      document.getElementById('resizeW').value = mainCanvas.width;
+      document.getElementById('resizeH').value = mainCanvas.height;
+      aspectRatio = mainCanvas.width / mainCanvas.height;
+    } else {
+      imageInfo.textContent = '-';
+    }
+  }
+
+  // Filters
+  function getFilterString() {
+    return `brightness(${filters.brightness}%) contrast(${filters.contrast}%) saturate(${filters.saturate}%) hue-rotate(${filters.hue}deg) grayscale(${filters.grayscale}%) sepia(${filters.sepia}%) invert(${filters.invert}%) blur(${filters.blur}px)`;
+  }
+
+  function previewFilters() {
+    if (historyIndex < 0) return;
+    mainCanvas.style.filter = getFilterString();
+  }
+
+  function resetFilterSliders() {
+    filters.brightness = 100; filters.contrast = 100; filters.saturate = 100;
+    filters.hue = 0; filters.grayscale = 0; filters.sepia = 0;
+    filters.invert = 0; filters.blur = 0;
+    mainCanvas.style.filter = 'none';
+
+    filterIds.forEach(id => {
+      const el = document.getElementById(id);
+      el.value = filters[id];
+      updateFilterLabel(id, filters[id]);
+    });
+  }
+
+  function updateFilterLabel(id, val) {
+    const unit = id === 'hue' ? '°' : (id === 'blur' ? 'px' : '%');
+    document.getElementById('val-' + id).textContent = val + unit;
+  }
+
+  filterIds.forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => {
+      filters[id] = parseFloat(el.value);
+      updateFilterLabel(id, filters[id]);
+      previewFilters();
+    });
+  });
+
+  document.getElementById('resetFilterBtn').addEventListener('click', resetFilterSliders);
+
+  document.getElementById('applyFilterBtn').addEventListener('click', () => {
+    if (historyIndex < 0) return;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = mainCanvas.width;
+    tempCanvas.height = mainCanvas.height;
+    const tctx = tempCanvas.getContext('2d');
+    tctx.filter = getFilterString();
+    tctx.drawImage(mainCanvas, 0, 0);
+
+    ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+    resetFilterSliders();
+    pushHistory();
+    statusText.textContent = '色調補正を適用しました';
+  });
+
+  // Transform: Rotate & Flip
+  function transformCanvas(type) {
+    if (historyIndex < 0) return;
+    const w = mainCanvas.width;
+    const h = mainCanvas.height;
+    const temp = document.createElement('canvas');
+    const tctx = temp.getContext('2d');
+
+    if (type === 'rotL' || type === 'rotR') {
+      temp.width = h;
+      temp.height = w;
+      tctx.translate(temp.width / 2, temp.height / 2);
+      tctx.rotate((type === 'rotR' ? 90 : -90) * Math.PI / 180);
+      tctx.drawImage(mainCanvas, -w / 2, -h / 2);
+    } else {
+      temp.width = w;
+      temp.height = h;
+      tctx.translate(type === 'flipH' ? w : 0, type === 'flipV' ? h : 0);
+      tctx.scale(type === 'flipH' ? -1 : 1, type === 'flipV' ? -1 : 1);
+      tctx.drawImage(mainCanvas, 0, 0);
+    }
+
+    mainCanvas.width = overlayCanvas.width = temp.width;
+    mainCanvas.height = overlayCanvas.height = temp.height;
+    ctx.drawImage(temp, 0, 0);
+    pushHistory();
+  }
+
+  document.getElementById('rotLeftBtn').addEventListener('click', () => transformCanvas('rotL'));
+  document.getElementById('rotRightBtn').addEventListener('click', () => transformCanvas('rotR'));
+  document.getElementById('flipHBtn').addEventListener('click', () => transformCanvas('flipH'));
+  document.getElementById('flipVBtn').addEventListener('click', () => transformCanvas('flipV'));
+
+  // Resize
+  const resizeW = document.getElementById('resizeW');
+  const resizeH = document.getElementById('resizeH');
+  const keepAspect = document.getElementById('keepAspect');
+
+  resizeW.addEventListener('input', () => {
+    if (keepAspect.checked && resizeW.value) {
+      resizeH.value = Math.max(1, Math.round(resizeW.value / aspectRatio));
+    }
+  });
+  resizeH.addEventListener('input', () => {
+    if (keepAspect.checked && resizeH.value) {
+      resizeW.value = Math.max(1, Math.round(resizeH.value * aspectRatio));
+    }
+  });
+
+  document.getElementById('applyResizeBtn').addEventListener('click', () => {
+    if (historyIndex < 0) return;
+    const nw = parseInt(resizeW.value, 10);
+    const nh = parseInt(resizeH.value, 10);
+    if (!nw || !nh || nw < 1 || nh < 1) return;
+
+    const temp = document.createElement('canvas');
+    temp.width = nw;
+    temp.height = nh;
+    temp.getContext('2d').drawImage(mainCanvas, 0, 0, nw, nh);
+
+    mainCanvas.width = overlayCanvas.width = nw;
+    mainCanvas.height = overlayCanvas.height = nh;
+    ctx.drawImage(temp, 0, 0);
+    pushHistory();
+    statusText.textContent = `${nw} × ${nh} px にリサイズしました`;
+  });
+
+  // Crop & Drawing Tools
+  const startCropBtn = document.getElementById('startCropBtn');
+  const applyCropBtn = document.getElementById('applyCropBtn');
+
+  startCropBtn.addEventListener('click', () => {
+    if (historyIndex < 0) return;
+    if (currentTool === 'crop') {
+      setTool('none');
+    } else {
+      setTool('crop');
+      statusText.textContent = 'キャンバス上をドラッグして切り抜き範囲を指定してください';
+    }
+  });
+
+  applyCropBtn.addEventListener('click', () => {
+    if (!cropRect || cropRect.w < 5 || cropRect.h < 5) return;
+    const temp = document.createElement('canvas');
+    temp.width = cropRect.w;
+    temp.height = cropRect.h;
+    temp.getContext('2d').drawImage(
+      mainCanvas,
+      cropRect.x, cropRect.y, cropRect.w, cropRect.h,
+      0, 0, cropRect.w, cropRect.h
+    );
+    mainCanvas.width = overlayCanvas.width = cropRect.w;
+    mainCanvas.height = overlayCanvas.height = cropRect.h;
+    ctx.drawImage(temp, 0, 0);
+    setTool('none');
+    pushHistory();
+    statusText.textContent = '切り抜きを適用しました';
+  });
+
+  document.querySelectorAll('.tool-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setTool(btn.dataset.tool);
+    });
+  });
+
+  function setTool(tool) {
+    currentTool = tool;
+    cropRect = null;
+    applyCropBtn.disabled = true;
+    startCropBtn.classList.toggle('active', tool === 'crop');
+    octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+    document.querySelectorAll('.tool-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.tool === tool);
+    });
+    document.getElementById('textToolPanel').style.display = tool === 'text' ? 'block' : 'none';
+    overlayCanvas.style.cursor = tool === 'none' ? 'default' : 'crosshair';
+  }
+
+  const brushSizeInput = document.getElementById('brushSize');
+  brushSizeInput.addEventListener('input', () => {
+    document.getElementById('val-brushSize').textContent = brushSizeInput.value + 'px';
+  });
+
+  function getCanvasCoords(e) {
+    const rect = overlayCanvas.getBoundingClientRect();
+    const scaleX = overlayCanvas.width / rect.width;
+    const scaleY = overlayCanvas.height / rect.height;
+    return {
+      x: Math.round((e.clientY !== undefined ? (e.clientX - rect.left) : 0) * scaleX),
+      y: Math.round((e.clientY !== undefined ? (e.clientY - rect.top) : 0) * scaleY)
+    };
+  }
+
+  overlayCanvas.addEventListener('pointerdown', e => {
+    if (historyIndex < 0 || currentTool === 'none') return;
+    isPointerDown = true;
+    const pos = getCanvasCoords(e);
+    startX = pos.x;
+    startY = pos.y;
+
+    const color = document.getElementById('drawColor').value;
+    const size = parseInt(brushSizeInput.value, 10);
+
+    if (currentTool === 'pen') {
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    } else if (currentTool === 'mosaic') {
+      applyMosaicBrush(startX, startY, size * 2);
+    } else if (currentTool === 'text') {
+      const text = document.getElementById('textInput').value.trim();
+      if (text) {
+        ctx.font = `bold ${size * 3}px sans-serif`;
+        ctx.fillStyle = color;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, startX, startY);
+        pushHistory();
+        statusText.textContent = 'テキストを追加しました';
+      }
+      isPointerDown = false;
+    }
+  });
+
+  overlayCanvas.addEventListener('pointermove', e => {
+    if (!isPointerDown) return;
+    const pos = getCanvasCoords(e);
+    const size = parseInt(brushSizeInput.value, 10);
+    const color = document.getElementById('drawColor').value;
+
+    if (currentTool === 'pen') {
+      ctx.lineTo(pos.x, pos.y);
+      ctx.stroke();
+    } else if (currentTool === 'mosaic') {
+      applyMosaicBrush(pos.x, pos.y, size * 2);
+    } else if (currentTool === 'rect') {
+      octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.strokeStyle = color;
+      octx.lineWidth = size;
+      octx.strokeRect(startX, startY, pos.x - startX, pos.y - startY);
+    } else if (currentTool === 'crop') {
+      const x = Math.max(0, Math.min(startX, pos.x));
+      const y = Math.max(0, Math.min(startY, pos.y));
+      const w = Math.min(overlayCanvas.width - x, Math.abs(pos.x - startX));
+      const h = Math.min(overlayCanvas.height - y, Math.abs(pos.y - startY));
+      cropRect = { x, y, w, h };
+
+      octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      octx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      octx.clearRect(x, y, w, h);
+      octx.strokeStyle = '#4f8cff';
+      octx.lineWidth = 2;
+      octx.strokeRect(x, y, w, h);
+      applyCropBtn.disabled = !(w >= 5 && h >= 5);
+    }
+  });
+
+  window.addEventListener('pointerup', e => {
+    if (!isPointerDown) return;
+    isPointerDown = false;
+
+    if (currentTool === 'pen' || currentTool === 'mosaic') {
+      pushHistory();
+    } else if (currentTool === 'rect') {
+      const pos = getCanvasCoords(e);
+      const size = parseInt(brushSizeInput.value, 10);
+      const color = document.getElementById('drawColor').value;
+      octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.strokeRect(startX, startY, pos.x - startX, pos.y - startY);
+      pushHistory();
+    }
+  });
+
+  function applyMosaicBrush(cx, cy, radius) {
+    const blockSize = Math.max(6, Math.round(radius / 2));
+    const startBX = Math.max(0, Math.floor((cx - radius) / blockSize) * blockSize);
+    const startBY = Math.max(0, Math.floor((cy - radius) / blockSize) * blockSize);
+    const endBX = Math.min(mainCanvas.width, cx + radius);
+    const endBY = Math.min(mainCanvas.height, cy + radius);
+
+    for (let y = startBY; y < endBY; y += blockSize) {
+      for (let x = startBX; x < endBX; x += blockSize) {
+        const imgData = ctx.getImageData(x, y, 1, 1).data;
+        ctx.fillStyle = `rgb(${imgData[0]}, ${imgData[1]}, ${imgData[2]})`;
+        ctx.fillRect(x, y, blockSize, blockSize);
+      }
+    }
+  }
+
+  // Export / Save
+  downloadBtn.addEventListener('click', () => {
+    if (historyIndex < 0) return;
+    const format = exportFormat.value;
+    const ext = format === 'image/jpeg' ? 'jpg' : (format === 'image/webp' ? 'webp' : 'png');
+
+    // Bake any unapplied filter slider values on export
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = mainCanvas.width;
+    exportCanvas.height = mainCanvas.height;
+    const ectx = exportCanvas.getContext('2d');
+
+    if (format === 'image/jpeg') {
+      ectx.fillStyle = '#ffffff';
+      ectx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    }
+    ectx.filter = getFilterString();
+    ectx.drawImage(mainCanvas, 0, 0);
+
+    const link = document.createElement('a');
+    link.download = `${fileName}_edited.${ext}`;
+    link.href = exportCanvas.toDataURL(format, 0.92);
+    link.click();
+    statusText.textContent = `${link.download} を保存しました`;
+  });
+})();
+</script>
+</body>
+</html>
