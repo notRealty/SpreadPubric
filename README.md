@@ -7,7 +7,7 @@
 - グラフの作成（9 種類）、画像の挿入
 - 既存の xlsx に含まれる画像・グラフを保持したまま保存
 
-PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx / .doc）を編集できる `docx-editor.html`、動画を編集できる `video-editor.html`、音楽（音声ファイル）を編集できる `audio-editor.html` も同梱しています。使い方は [pptx-editor.html（PowerPoint 版）](#pptx-editorhtmlpowerpoint-版)・[docx-editor.html（Word 版）](#docx-editorhtmlword-版)・[video-editor.html（動画版）](#video-editorhtml動画版)・[audio-editor.html（音楽版）](#audio-editorhtml音楽版) を参照してください。
+PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx / .doc）を編集できる `docx-editor.html`、動画を編集できる `video-editor.html`、音楽（音声ファイル）を編集できる `audio-editor.html`、画像を編集できる `image-editor.html` も同梱しています。使い方は [pptx-editor.html（PowerPoint 版）](#pptx-editorhtmlpowerpoint-版)・[docx-editor.html（Word 版）](#docx-editorhtmlword-版)・[video-editor.html（動画版）](#video-editorhtml動画版)・[audio-editor.html（音楽版）](#audio-editorhtml音楽版)・[image-editor.html（画像版）](#image-editorhtml画像版) を参照してください。
 
 ## 使い方
 
@@ -410,9 +410,39 @@ Word や Web ページからの貼り付けにも対応しています（不要�
 
 大切なファイルは、編集前にコピーを取ってからお使いください。
 
+## image-editor.html（画像版）
+
+ブラウザだけで動く画像エディタです。
+ほかのエディタと同じく **HTML ファイル 1 つ**で完結し、インストール・サーバー・インターネット接続は不要です。外部ライブラリも使っていません（画像の描画・フィルター加工・書き出しは、すべてブラウザ標準の Canvas API と本プロジェクトのコードで行います）。ファイルの中身が外部に送信されることもありません。
+
+### 使い方
+
+1. `image-editor.html` をダウンロードし、ダブルクリックしてブラウザで開きます。
+2. 「画像を開く」ボタン、ドラッグ＆ドロップ、または `Ctrl+V`（クリップボードからの貼り付け）で画像を読み込みます（PNG / JPEG / WebP / GIF など、ブラウザが表示できる画像形式に対応）。
+3. 左側のパネルで色調補正・変形・描画を行い、「保存」（`Ctrl+S`）で画像ファイルとして保存します。
+
+### 編集
+
+| 操作 | 方法 |
+|---|---|
+| 色調・エフェクト補正 | 明るさ・コントラスト・彩度・色相・グレースケール・セピア・階調反転・ぼかしをスライダーでリアルタイム調整し、「補正を確定」で反映 |
+| 回転・反転 | 左右 90° 回転、左右反転、上下反転 |
+| トリミング（切り抜き） | 「範囲選択開始」を押してキャンバス上をドラッグし、「切り抜き実行」で確定 |
+| リサイズ | 幅・高さ（px）を指定してサイズ変更（縦横比の維持に対応） |
+| 描画・文字追加 | フリーハンドペン、四角形枠、モザイクブラシ、テキスト挿入（色・太さ／サイズの変更に対応） |
+| 履歴操作 | 元に戻す（`Ctrl+Z`）・やり直す（`Ctrl+Y` / `Ctrl+Shift+Z`）・初期状態に戻す |
+
+### 書き出し・保存
+
+| 形式 | 内容 |
+|---|---|
+| PNG 形式 | 透過を保持したまま劣化なしで保存 |
+| JPEG 形式 | 写真などに適した圧縮形式で保存（透過部分は白背景で塗りつぶされます） |
+| WebP 形式 | 高圧縮・高画質な WebP 形式で保存 |
+
 ## ライセンス
 
-`xlsx-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html` は、MIT License です。
+`xlsx-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` は、MIT License です。
 
 ```
 MIT License
@@ -440,7 +470,7 @@ SOFTWARE.
 
 ### 埋め込んでいるライブラリ
 
-`xlsx-editor.html` には次のライブラリを埋め込んでいます。`pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html` にはサードパーティのライブラリは含まれていません。
+`xlsx-editor.html` には次のライブラリを埋め込んでいます。`pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` にはサードパーティのライブラリは含まれていません。
 
 | ライブラリ | バージョン | ライセンス |
 |---|---|---|
