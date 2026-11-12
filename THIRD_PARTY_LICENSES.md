@@ -1,15 +1,18 @@
 # サードパーティライセンス
 
-`xlsx-editor.html` には、以下のオープンソースライブラリが**改変せずに**埋め込まれています。
+`xlsx-editor.html` と `html-editor.html` には、以下のオープンソースライブラリが**改変せずに**埋め込まれています。
 各ライブラリの著作権は、それぞれの著作者に帰属します。
 
 `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` にはサードパーティのライブラリは含まれていません（すべて本プロジェクトのコードで、MIT License です）。
 
-| ライブラリ | バージョン | 用途 | ライセンス | 配布元 |
-|---|---|---|---|---|
-| SheetJS Community Edition | 0.20.3 | xlsx / xls / csv の読み書き | Apache License 2.0 | https://sheetjs.com / https://git.sheetjs.com/sheetjs/sheetjs |
-| Chart.js | 4.4.1 | グラフの描画 | MIT License | https://www.chartjs.org / https://github.com/chartjs/Chart.js |
-| JSZip | 3.10.1 | xlsx への画像・グラフの書き込み | MIT License（MIT / GPLv3 のデュアルライセンスのうち MIT を選択） | https://stuk.github.io/jszip / https://github.com/Stuk/jszip |
+| ライブラリ | バージョン | 使っているファイル | 用途 | ライセンス | 配布元 |
+|---|---|---|---|---|---|
+| SheetJS Community Edition | 0.20.3 | `xlsx-editor.html` | xlsx / xls / csv の読み書き | Apache License 2.0 | https://sheetjs.com / https://git.sheetjs.com/sheetjs/sheetjs |
+| Chart.js | 4.4.1 | `xlsx-editor.html` | グラフの描画 | MIT License | https://www.chartjs.org / https://github.com/chartjs/Chart.js |
+| JSZip | 3.10.1 | `xlsx-editor.html` | xlsx への画像・グラフの書き込み | MIT License（MIT / GPLv3 のデュアルライセンスのうち MIT を選択） | https://stuk.github.io/jszip / https://github.com/Stuk/jszip |
+| GrapesJS | 0.23.8 | `html-editor.html` | ページのレイアウト編集（ドラッグ＆ドロップ・スタイル編集など） | BSD 3-Clause License | https://grapesjs.com / https://github.com/GrapesJS/grapesjs |
+
+`html-editor.html` に埋め込んだ GrapesJS は、ファイル（`dist/grapes.min.js`・`dist/css/grapes.min.css`、npm で配布されているもの）自体は改変していません。外部への通信（Font Awesome の CDN からの読み込み、利用状況の送信）は、GrapesJS の設定（`cssIcons: ''`・`telemetry: false`）で止めています。
 
 ---
 
@@ -267,4 +270,38 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+---
+
+## GrapesJS 0.23.8
+
+BSD 3-Clause License で提供されています。全文は以下のとおりです。
+
+```
+Copyright (c) 2017-current, Artur Arseniev
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+- Neither the name "GrapesJS" nor the names of its contributors may be
+  used to endorse or promote products derived from this software without
+  specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
