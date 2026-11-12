@@ -7,7 +7,7 @@
 - グラフの作成（9 種類）、画像の挿入
 - 既存の xlsx に含まれる画像・グラフを保持したまま保存
 
-PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx / .doc）を編集できる `docx-editor.html`、動画を編集できる `video-editor.html`、音楽（音声ファイル）を編集できる `audio-editor.html`、画像を編集できる `image-editor.html` も同梱しています。使い方は [pptx-editor.html（PowerPoint 版）](#pptx-editorhtmlpowerpoint-版)・[docx-editor.html（Word 版）](#docx-editorhtmlword-版)・[video-editor.html（動画版）](#video-editorhtml動画版)・[audio-editor.html（音楽版）](#audio-editorhtml音楽版)・[image-editor.html（画像版）](#image-editorhtml画像版) を参照してください。
+PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx / .doc）を編集できる `docx-editor.html`、動画を編集できる `video-editor.html`、音楽（音声ファイル）を編集できる `audio-editor.html`、画像を編集できる `image-editor.html`、Web ページ（HTML）のレイアウトをマウスで編集できる `html-editor.html` も同梱しています。使い方は [pptx-editor.html（PowerPoint 版）](#pptx-editorhtmlpowerpoint-版)・[docx-editor.html（Word 版）](#docx-editorhtmlword-版)・[video-editor.html（動画版）](#video-editorhtml動画版)・[audio-editor.html（音楽版）](#audio-editorhtml音楽版)・[image-editor.html（画像版）](#image-editorhtml画像版)・[html-editor.html（HTML 版）](#html-editorhtmlhtml-版) を参照してください。
 
 ## 使い方
 
@@ -440,9 +440,97 @@ Word や Web ページからの貼り付けにも対応しています（不要�
 | JPEG 形式 | 写真などに適した圧縮形式で保存（透過部分は白背景で塗りつぶされます） |
 | WebP 形式 | 高圧縮・高画質な WebP 形式で保存 |
 
+## html-editor.html（HTML 版）
+
+ブラウザだけで動く、Web ページ（HTML）のエディタです。部品をドラッグ＆ドロップで置いて、**マウス操作だけでレイアウトを編集**できます。
+ほかのエディタと同じく **HTML ファイル 1 つ**で完結し、インストール・サーバー・インターネット接続は不要です。オープンソースのページ編集ライブラリ [GrapesJS](https://grapesjs.com)（BSD 3-Clause License・無料）を、ファイルの中に埋め込んでいます。外部のサーバーへの通信（アイコンの読み込みや利用状況の送信など）は止めてあり、ファイルの中身が外部に送信されることもありません。
+
+### 使い方
+
+1. `html-editor.html` をダウンロードし、ダブルクリックしてブラウザで開きます（最初はサンプルのページが表示されるので、そのまま編集を試せます）。
+2. 「開く」ボタン、またはファイルのドラッグ＆ドロップで .html / .htm を読み込みます（「新規」で白紙のページからも始められます）。
+3. 左の「ブロック」をページへドラッグして部品を追加し、クリックで選んだ要素を右のパネルで編集します。
+4. 「保存」（`Ctrl+S`）で HTML ファイルに保存します。
+
+| 読み込める形式 | 内容 |
+|---|---|
+| .html / .htm | 文字コードは UTF-8 のほか、Shift_JIS・EUC-JP なども `<meta charset>` から自動で判別します |
+| HTML のテキスト | 「貼り付けて読込」で、コピーした HTML をそのまま読み込めます（ページ全体でも、本文の一部だけでも可） |
+
+### 編集（マウスでの操作）
+
+| 操作 | 方法 |
+|---|---|
+| 部品の追加 | 左の「ブロック」を、ページ上の置きたい場所へドラッグ |
+| 要素の選択 | クリック。選んだ要素の上に出るツールバーの ↑ で、外側の要素（親要素）を選び直せます |
+| 移動・並べ替え | 要素をドラッグ（またはツールバーの ✥ をドラッグ）。右の「レイヤー」タブの一覧でもドラッグで並べ替えられます |
+| 大きさの変更 | 選んだ要素の右・下・右下に出る小さな四角をドラッグ |
+| 複製・削除 | ツールバーの複製ボタン・ゴミ箱ボタン |
+| 文字の編集 | ダブルクリック。編集中に出るツールバーで、太字・斜体・下線・取り消し線・リンクを設定できます |
+| 画像の差し替え | 画像をダブルクリックして、画像ファイルを選ぶかドロップ（画像はページの中に埋め込んで保存します） |
+| 色・大きさ・余白など | 右の「スタイル」タブ（サイズと余白・配置・並べ方・文字・背景と枠線など） |
+| リンク先・代替テキストなど | 右の「設定」タブ |
+| 表示・非表示 | 右の「レイヤー」タブの目のアイコン |
+
+| ブロック | 内容 |
+|---|---|
+| レイアウト | セクション、ボックス、2 列、3 列、2 列（3:7）、余白、区切り線 |
+| 基本 | 大見出し、見出し、文章、リンク、ボタン、画像、箇条書き、番号付きリスト、引用、表 |
+| パーツ | ヘッダー、メインビジュアル、カード、カード 3 つ、画像と文章、フッター |
+
+#### 配置のしかた
+
+| モード | 動き |
+|---|---|
+| 通常配置 | ドラッグした要素を、ほかの要素の間に並べ替えて配置します。画面の幅が変わっても崩れにくい、ふつうの Web ページの作り方です |
+| 自由配置 | ドラッグした位置にそのまま配置します（`position: absolute` で位置を指定）。チラシのように、好きな場所に置きたいときに使います |
+
+#### 表示サイズ（PC・タブレット・スマホ）
+
+ツールバーの「PC」「タブレット」「スマホ」で、編集画面の幅を切り替えられます。タブレット・スマホの表示で変更したスタイルは、その幅以下の画面だけに効きます（タブレットは幅 992px 以下、スマホは幅 576px 以下）。スマホで見たときだけ文字を小さくする、といった調整ができます。
+
+### 保存
+
+| 操作 | 内容 |
+|---|---|
+| `Ctrl+S` / 「保存」 | 開いたファイルに上書き（Chrome / Edge）。新規の場合や、そのほかのブラウザでは、保存先の選択またはダウンロード |
+| `Ctrl+Shift+S` / 「名前を付けて保存」 | 名前を付けて保存 |
+| 「コード」 | 保存される HTML を表示し、コピーできます |
+| 「ページ設定」 | ページのタイトル・言語・保存するファイル名を変更 |
+
+保存するファイルは、`<head>` の中身（`<meta>`・`<link>`・`<script>` など）や `<html>`・`<body>` の属性を、開いたファイルのまま残します。CSS は `<style>` にまとめて書き出し、文字コードは UTF-8 になります。
+
+編集中の内容は、このブラウザの中に自動で一時保存されます。保存せずにブラウザを閉じてしまっても、次に開いたときに復元するかを確認します（画像が多く容量を超える場合は、一時保存されません）。
+
+### キーボードショートカット（任意）
+
+マウスだけで操作できますが、次のショートカットも使えます。
+
+| キー | 動作 |
+|---|---|
+| Ctrl + O / Ctrl + S / Ctrl + Shift + S | 開く / 保存 / 名前を付けて保存 |
+| Ctrl + Z / Ctrl + Y（Ctrl + Shift + Z） | 元に戻す / やり直し |
+| Ctrl + C / Ctrl + V | 選んだ要素のコピー / 貼り付け |
+| Delete / Backspace | 選んだ要素を削除 |
+
+### 対応ブラウザ
+
+最新の Chrome / Edge を推奨します（上書き保存に対応）。Firefox / Safari でも動作しますが、保存のたびにダウンロードになります。マウスでの操作を前提にしているため、スマートフォン・タブレットでの利用には向いていません。
+
+### 制限事項
+
+- **読み込んだページの `<script>` は、編集画面では実行されません。** 保存すると、`<head>` の中のものは元の位置に、`<body>` の中のものは本文の最後にまとめて書き出します。`onclick` などのスクリプト属性と `javascript:` のリンクは、読み込むときに取り除きます。
+- JavaScript で画面を組み立てるページ（React などで作ったもの）は、正しく編集できません。HTML と CSS で書かれた静的なページ向けです。
+- インターネット上の CSS・画像・フォント（CDN の Bootstrap など）を参照しているページは、オフラインでは見た目が正しく表示されません（保存した HTML には参照がそのまま残ります）。また、`images/photo.jpg` のような相対パスで参照している画像は、編集画面に表示されません。
+- CSS の `@import`・`@layer` などは、編集はできませんがそのまま保存します。`@media` の中に `@supports` を書くような入れ子の指定や、CSS の入れ子（ネスト）記法は、正しく読み込めない場合があります。
+- 保存した HTML は整形されず、本文が 1 行にまとまった形で書き出されます。また、スタイルを付けた要素には `id="i..."` のような ID が自動で付きます。
+- 自由配置で置いた要素は、画面の幅が変わると重なったり、はみ出したりすることがあります。
+
+大切なファイルは、編集前にコピーを取ってからお使いください。
+
 ## ライセンス
 
-`xlsx-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` は、MIT License です。
+`xlsx-editor.html`・`html-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` は、MIT License です。
 
 ```
 MIT License
@@ -470,13 +558,16 @@ SOFTWARE.
 
 ### 埋め込んでいるライブラリ
 
-`xlsx-editor.html` には次のライブラリを埋め込んでいます。`pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` にはサードパーティのライブラリは含まれていません。
+`xlsx-editor.html` と `html-editor.html` には次のライブラリを、改変せずに埋め込んでいます。`pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` にはサードパーティのライブラリは含まれていません。いずれも無料で利用・再配布できるオープンソースのライセンスです。
 
-| ライブラリ | バージョン | ライセンス |
-|---|---|---|
-| [SheetJS Community Edition](https://sheetjs.com) | 0.20.3 | Apache License 2.0 |
-| [Chart.js](https://www.chartjs.org) | 4.4.1 | MIT License |
-| [JSZip](https://stuk.github.io/jszip/) | 3.10.1 | MIT License（MIT / GPLv3 のデュアルライセンスから MIT を選択） |
+| ライブラリ | バージョン | 使っているファイル | ライセンス |
+|---|---|---|---|
+| [SheetJS Community Edition](https://sheetjs.com) | 0.20.3 | `xlsx-editor.html` | Apache License 2.0 |
+| [Chart.js](https://www.chartjs.org) | 4.4.1 | `xlsx-editor.html` | MIT License |
+| [JSZip](https://stuk.github.io/jszip/) | 3.10.1 | `xlsx-editor.html` | MIT License（MIT / GPLv3 のデュアルライセンスから MIT を選択） |
+| [GrapesJS](https://grapesjs.com) | 0.23.8 | `html-editor.html` | BSD 3-Clause License |
+
+`html-editor.html` では、GrapesJS の著作権表示とライセンス全文を、ファイル先頭のコメントと、画面の「?」（使い方とライセンス）にも記載しています。
 
 各ライブラリのライセンス全文は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) を参照してください。
 
