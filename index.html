@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ローカルエディタ集</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --sub: #5b6474; --line: #dfe3ea; --accent: #2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14171c; --card: #1d2128; --fg: #e8ebf0; --sub: #9aa3b2; --line: #2e3440; --accent: #6ea0ff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; line-height: 1.6; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 16px 56px; }
+  h1 { font-size: 1.6rem; margin: 0 0 8px; }
+  .lead { color: var(--sub); margin: 0 0 28px; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  a.card { display: block; height: 100%; padding: 16px 18px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; color: inherit; text-decoration: none; }
+  a.card:hover, a.card:focus-visible { border-color: var(--accent); outline: none; }
+  .name { font-weight: 600; color: var(--accent); }
+  .desc { display: block; font-size: .9rem; color: var(--sub); margin-top: 4px; }
+  footer { margin-top: 36px; font-size: .85rem; color: var(--sub); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ローカルエディタ集</h1>
+  <p class="lead">ブラウザだけで動くファイルエディタです。開いたファイルの読み込み・編集・保存はすべて端末の中で行われ、ファイルの中身がどこかへ送信されることはありません。</p>
+  <ul>
+    <li><a class="card" href="xlsx-editor.html"><span class="name">Excel エディタ</span><span class="desc">.xlsx / .xls / .csv の編集、数式、グラフ</span></a></li>
+    <li><a class="card" href="docx-editor.html"><span class="name">Word エディタ</span><span class="desc">.docx / .doc の編集</span></a></li>
+    <li><a class="card" href="pptx-editor.html"><span class="name">PowerPoint エディタ</span><span class="desc">.pptx / .ppt の編集</span></a></li>
+    <li><a class="card" href="video-editor.html"><span class="name">動画エディタ</span><span class="desc">動画のカット・書き出し</span></a></li>
+    <li><a class="card" href="audio-editor.html"><span class="name">音楽エディタ</span><span class="desc">音声ファイルの編集</span></a></li>
+    <li><a class="card" href="image-editor.html"><span class="name">画像エディタ</span><span class="desc">画像の加工</span></a></li>
+    <li><a class="card" href="html-editor.html"><span class="name">HTML エディタ</span><span class="desc">Web ページのレイアウトをマウスで編集</span></a></li>
+  </ul>
+  <footer>
+    <p>各 HTML ファイルはダウンロードしてオフラインでも使えます。</p>
+    <p><a href="https://github.com/notRealty/SpreadPubric/blob/main/LICENSE">ライセンス（MIT）</a> ・ <a href="https://github.com/notRealty/SpreadPubric/blob/main/THIRD_PARTY_LICENSES.md">サードパーティライセンス</a> ・ <a href="https://github.com/notRealty/SpreadPubric">ソースコード</a></p>
+  </footer>
+</main>
+</body>
+</html>
