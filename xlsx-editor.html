@@ -36,6 +36,8 @@ td.e{color:var(--err)}
 td.stale{color:var(--stale);text-decoration:underline dotted}
 td.sel{outline:2px solid var(--sel);outline-offset:-2px;background:var(--selbg)}
 th.hl{background:var(--selbg);color:var(--fg)}
+thead th.hb{box-shadow:inset 3px 0 0 var(--muted)}
+tbody th.hb{box-shadow:inset 0 3px 0 var(--muted)}
 #rangeBox{position:absolute;display:none;border:1px solid var(--sel);background:var(--rng);pointer-events:none;z-index:1}
 #fillHandle{position:absolute;display:none;width:7px;height:7px;margin:-4px 0 0 -4px;background:var(--sel);border:1px solid var(--bg);cursor:crosshair;z-index:4;touch-action:none}
 #fillBox{position:absolute;display:none;border:2px dashed var(--muted);pointer-events:none;z-index:3}
@@ -1142,21 +1144,108 @@ function showSheet(name){
 function colWidth(ws, c){
   const x = (ws['!cols'] || [])[c];
   let w = DEF_COLW;
-  if (x){ if (x.hidden) w = 6; else if (x.wpx) w = x.wpx; else if (x.wch) w = Math.round(x.wch * 7 + 5); else if (x.width) w = Math.round(x.width * 7); }
+  if (x){ if (x.wpx) w = x.wpx; else if (x.wch) w = Math.round(x.wch * 7 + 5); else if (x.width) w = Math.round(x.width * 7); }
   return Math.max(6, Math.min(w, 600));
+}
+/* ---------- 行・列の表示／非表示 ---------- */
+// 幅・高さ 0 で保存されたものも非表示として扱う
+const colHidden = (ws, c) => { const x = (ws['!cols'] || [])[c]; return !!(x && (x.hidden || x.width === 0 || x.wpx === 0 || x.wch === 0)); };
+const rowHidden = (ws, r) => { const x = (ws['!rows'] || [])[r]; return !!(x && (x.hidden || x.hpx === 0 || x.hpt === 0)); };
+let hidR = [], hidC = [];
+const hidCss = document.head.appendChild(document.createElement('style'));
+// v から step 方向に最も近い表示中の行（列）。端まで非表示なら逆方向に探す
+function visIdx(v, step, hid){
+  let i = Math.max(0, v);
+  while (i >= 0 && hid(i)) i += step;
+  if (i >= 0) return i;
+  i = Math.max(0, v); while (hid(i)) i -= step;
+  return i;
+}
+const visR = (r, step) => visIdx(r, step || 1, i => rowHidden(wb.Sheets[cur], i));
+const visC = (c, step) => visIdx(c, step || 1, i => colHidden(wb.Sheets[cur], i));
+function setHidden(axis, a, b, hide){
+  commitAll();
+  const ws = wb.Sheets[cur], dim = axis === 'c' ? '!cols' : '!rows', isHid = axis === 'c' ? colHidden : rowHidden;
+  const n = axis === 'c' ? nCols : nRows, name = axis === 'c' ? '列' : '行';
+  if (hide){
+    let vis = 0; for (let i = 0; i < n; i++) if (!(i >= a && i <= b) && !isHid(ws, i)) vis++;
+    if (!vis){ setStatus(`すべての${name}を非表示にすることはできません`, true); return; }
+  }
+  const before = JSON.parse(JSON.stringify(ws[dim] || []));
+  const arr = ws[dim] || (ws[dim] = []);
+  let cnt = 0;
+  for (let i = a; i <= b; i++){
+    if (isHid(ws, i) === hide) continue;
+    cnt++;
+    if (hide){ arr[i] = {...(arr[i] || {}), hidden:true}; continue; }
+    const x = {...arr[i]}; delete x.hidden;
+    if (axis === 'c' && (x.width === 0 || x.wpx === 0 || x.wch === 0)){ delete x.width; delete x.wpx; delete x.wch; }
+    if (axis === 'r' && (x.hpx === 0 || x.hpt === 0)){ delete x.hpx; delete x.hpt; }
+    arr[i] = Object.keys(x).some(k => k !== 'MDW') ? x : undefined;
+  }
+  if (!cnt){ setStatus(hide ? `選択した${name}はすでに非表示です` : `選択範囲に非表示の${name}はありません`); return; }
+  const after = JSON.parse(JSON.stringify(arr));
+  undoStack.push({kind:'dims', sheet:cur, dim, before, after}); redoStack.length = 0;
+  refreshDims(!hide);
+  markDirty();
+  setStatus(`${cnt} ${name}を${hide ? '非表示に' : '再表示'}しました`);
+}
+function unhideAll(){
+  commitAll();
+  const ws = wb.Sheets[cur], st = {};
+  for (const dim of ['!cols', '!rows']) st[dim] = JSON.parse(JSON.stringify(ws[dim] || []));
+  const fix = (dim, isHid) => { const arr = ws[dim] || []; for (let i = 0; i < arr.length; i++) if (arr[i] && isHid(ws, i)){
+    const x = {...arr[i]}; delete x.hidden;
+    for (const k of ['width', 'wpx', 'wch', 'hpx', 'hpt']) if (x[k] === 0) delete x[k];
+    arr[i] = Object.keys(x).some(k => k !== 'MDW') ? x : undefined; } };
+  fix('!cols', colHidden); fix('!rows', rowHidden);
+  undoStack.push({kind:'dims', sheet:cur, dims:st, after:{'!cols':JSON.parse(JSON.stringify(ws['!cols'] || [])), '!rows':JSON.parse(JSON.stringify(ws['!rows'] || []))}}); redoStack.length = 0;
+  refreshDims(true);
+  markDirty();
+  setStatus('すべての行・列を再表示しました');
+}
+// 元に戻す・やり直し
+function applyDims(e, which){
+  const ws = wb.Sheets[e.sheet]; if (!ws) return;
+  if (e.dims){ const st = which === 'before' ? e.dims : e.after; for (const d in st) ws[d] = JSON.parse(JSON.stringify(st[d])); }
+  else ws[e.dim] = JSON.parse(JSON.stringify(e[which]));
+  if (e.sheet !== cur) showSheet(e.sheet); else refreshDims(true);
+  markDirty();
+}
+// 再描画して選択を表示中のセルに戻す。keepRange なら範囲選択も保つ
+function refreshDims(keepRange){
+  const s = {...sel}, k = {...corner};
+  render(); select(s.r, s.c);
+  if (keepRange && (k.r !== s.r || k.c !== s.c)){ corner = k; positionRangeBox(); updateAgg(); }
+}
+function anyHidden(ws, axis, a, b){
+  const isHid = axis === 'c' ? colHidden : rowHidden;
+  for (let i = a; i <= b; i++) if (isHid(ws, i)) return true;
+  return false;
+}
+function sheetHasHidden(ws){
+  return (ws['!cols'] || []).some((x, i) => x && colHidden(ws, i)) || (ws['!rows'] || []).some((x, i) => x && rowHidden(ws, i));
 }
 function render(){
   const ws = wb.Sheets[cur], ri = ws['!rows'] || [];
   const hasBd = STYLE_KEYS.some(p => ws[p] && Object.keys(ws[p]).length > 0);
+  hidC = []; hidR = [];
+  for (let c = 0; c < nCols; c++) hidC[c] = colHidden(ws, c);
+  for (let r = 0; r < nRows; r++) hidR[r] = rowHidden(ws, r);
+  // 非表示の列は col とその列のセルをまとめて表から外す（行は tr に直接指定）
+  const css = [];
+  for (let c = 0; c < nCols; c++) if (hidC[c]) css.push(`#grid col:nth-child(${c + 2}),#grid tr>:nth-child(${c + 2})`);
+  hidCss.textContent = css.length ? css.join(',') + '{display:none}' : '';
   const h = [];
   h.push('<colgroup><col style="width:48px">');
   for (let c = 0; c < nCols; c++) h.push(`<col style="width:${colWidth(ws, c)}px">`);
   h.push('</colgroup><thead><tr><th class="corner"></th>');
-  for (let c = 0; c < nCols; c++) h.push('<th>' + XLSX.utils.encode_col(c) + '</th>');
+  for (let c = 0; c < nCols; c++) h.push(`<th${c > 0 && hidC[c - 1] && !hidC[c] ? ' class="hb" title="左に非表示の列があります"' : ''}>` + XLSX.utils.encode_col(c) + '</th>');
   h.push('</tr></thead><tbody>');
   for (let r = 0; r < nRows; r++){
-    const x = ri[r], hp = x && !x.hidden && (x.hpx || (x.hpt && x.hpt * 4 / 3));
-    h.push(`<tr${hp ? ` style="height:${Math.round(hp)}px"` : ''}><th>${r + 1}</th>`);
+    const x = ri[r], hp = x && !hidR[r] && (x.hpx || (x.hpt && x.hpt * 4 / 3));
+    const hb = r > 0 && hidR[r - 1] && !hidR[r];
+    h.push(`<tr${hidR[r] ? ' style="display:none"' : hp ? ` style="height:${Math.round(hp)}px"` : ''}><th${hb ? ' class="hb" title="上に非表示の行があります"' : ''}>${r + 1}</th>`);
     for (let c = 0; c < nCols; c++){
       const k = enc(r, c), cell = ws[k], bs = hasBd ? cellCss(ws, r, c) : '';
       const st = bs ? ` style="${bs}"` : '';
@@ -1174,12 +1263,16 @@ function render(){
 }
 // セル境界のピクセル位置（図形の配置に使う）
 function computeGeo(){
-  const body = grid.tBodies[0], first = body.rows[0];
-  const cx = [], ry = [];
-  for (let c = 0; c < nCols; c++) cx.push(first.cells[c + 1].offsetLeft);
-  const lc = first.cells[nCols]; cx.push(lc.offsetLeft + lc.offsetWidth);
-  for (let r = 0; r < nRows; r++) ry.push(body.rows[r].offsetTop);
-  const lr = body.rows[nRows - 1]; ry.push(lr.offsetTop + lr.offsetHeight);
+  // 非表示の行・列は幅 0 として、次に表示されている行・列と同じ位置にする
+  const body = grid.tBodies[0];
+  let fr = 0; while (fr < nRows - 1 && hidR[fr]) fr++;
+  const first = body.rows[fr], cx = new Array(nCols + 1), ry = new Array(nRows + 1);
+  let lc = nCols - 1; while (lc >= 0 && hidC[lc]) lc--;
+  cx[nCols] = lc >= 0 ? first.cells[lc + 1].offsetLeft + first.cells[lc + 1].offsetWidth : first.cells[0].offsetWidth;
+  for (let c = nCols - 1; c >= 0; c--) cx[c] = hidC[c] ? cx[c + 1] : first.cells[c + 1].offsetLeft;
+  let lr = nRows - 1; while (lr >= 0 && hidR[lr]) lr--;
+  ry[nRows] = lr >= 0 ? body.rows[lr].offsetTop + body.rows[lr].offsetHeight : grid.tHead.offsetHeight;
+  for (let r = nRows - 1; r >= 0; r--) ry[r] = hidR[r] ? ry[r + 1] : body.rows[r].offsetTop;
   geo = {cx, ry};
 }
 function anchorPx(a){
@@ -1320,8 +1413,8 @@ function ensureSize(r, c){
   render();
   td(sel.r, sel.c).classList.add('sel');
 }
-function select(r, c){
-  r = Math.max(0, r); c = Math.max(0, c);
+function select(r, c, dr, dc){
+  r = visR(Math.max(0, r), dr); c = visC(Math.max(0, c), dc);
   ensureSize(r, c);
   const old = td(sel.r, sel.c);
   if (old) old.classList.remove('sel');
@@ -1342,6 +1435,7 @@ function select(r, c){
 }
 function extendTo(r, c){
   r = Math.max(0, r); c = Math.max(0, c);
+  r = visR(r, r < corner.r ? -1 : 1); c = visC(c, c < corner.c ? -1 : 1);
   ensureSize(r, c);
   corner = {r, c};
   scrollToCell(td(r, c));
@@ -1509,6 +1603,7 @@ function undo(){
   if (e.kind === 'cells') applyOps([...e.ops].reverse(), 'old');
   else if (e.kind === 'styles') applyStyleMap(e.sheet, e.prop, e.before);
   else if (e.kind === 'rename') renameSheet(e.to, e.from);
+  else if (e.kind === 'dims') applyDims(e, 'before');
   else restoreState(e.before);
 }
 function redo(){
@@ -1516,6 +1611,7 @@ function redo(){
   if (e.kind === 'cells') applyOps(e.ops, 'nu');
   else if (e.kind === 'styles') applyStyleMap(e.sheet, e.prop, e.after);
   else if (e.kind === 'rename') renameSheet(e.from, e.to);
+  else if (e.kind === 'dims') applyDims(e, 'after');
   else restoreState(e.after);
 }
 function recalcAll(){
@@ -2402,6 +2498,7 @@ grid.addEventListener('contextmenu', e => {
     else if (r >= 0 && c >= 0) select(r, c);
   }
   const g = selRect(), nr = g.e.r - g.s.r + 1, nc = g.e.c - g.s.c + 1;
+  const ws = wb.Sheets[cur];
   const rowItems = [
     {label:`上に ${nr} 行挿入`, fn:() => structOp('r', g.s.r, nr)},
     {label:`${nr} 行削除`, fn:() => structOp('r', g.s.r, -nr)},
@@ -2410,7 +2507,17 @@ grid.addEventListener('contextmenu', e => {
     {label:`左に ${nc} 列挿入`, fn:() => structOp('c', g.s.c, nc)},
     {label:`${nc} 列削除`, fn:() => structOp('c', g.s.c, -nc)},
   ];
-  const items = inHead && c >= 0 ? colItems : (!inHead && c < 0 ? rowItems : [...rowItems, ...colItems]);
+  const rowHide = [
+    {label:`${nr} 行を非表示（Ctrl+9）`, fn:() => setHidden('r', g.s.r, g.e.r, true)},
+    {label:'行の再表示（Ctrl+Shift+9）', fn:() => setHidden('r', g.s.r, g.e.r, false), disabled:!anyHidden(ws, 'r', g.s.r, g.e.r)},
+  ];
+  const colHide = [
+    {label:`${nc} 列を非表示（Ctrl+0）`, fn:() => setHidden('c', g.s.c, g.e.c, true)},
+    {label:'列の再表示（Ctrl+Shift+0）', fn:() => setHidden('c', g.s.c, g.e.c, false), disabled:!anyHidden(ws, 'c', g.s.c, g.e.c)},
+  ];
+  const all = sheetHasHidden(ws) ? [{label:'すべての行・列を再表示', fn:unhideAll}] : [];
+  const items = inHead && c >= 0 ? [...colItems, '-', ...colHide, ...all]
+    : (!inHead && c < 0 ? [...rowItems, '-', ...rowHide, ...all] : [...rowItems, ...colItems, '-', ...rowHide, ...colHide, ...all]);
   showMenu(e.clientX, e.clientY, [
     {label:'セルを編集', fn:() => startEdit('edit', editText(wb.Sheets[cur][enc(sel.r, sel.c)]))},
     {label:'コピー', fn:menuCopy},
@@ -2448,7 +2555,7 @@ function updateTitle(){
 }
 
 /* ---------- キーボード・マウス ---------- */
-function move(dr, dc){ select(sel.r + dr, sel.c + dc); }
+function move(dr, dc){ select(sel.r + dr, sel.c + dc, dr < 0 ? -1 : 1, dc < 0 ? -1 : 1); }
 editor.addEventListener('keydown', e => {
   if (e.isComposing || e.keyCode === 229) return;
   const k = e.key, ctrl = e.ctrlKey || e.metaKey;
@@ -2476,6 +2583,12 @@ editor.addEventListener('keydown', e => {
     else if (kl === 'r'){ e.preventDefault(); fill('right'); }
     else if (kl === 'a'){ e.preventDefault(); const rg = sheetRange(cur); select(0, 0); extendTo(rg.e.r, rg.e.c); }
     else if (k === 'Home'){ e.preventDefault(); select(0, 0); }
+    // Ctrl+9 / Ctrl+0：行・列を非表示、Shift 付きで再表示（キー配列によらず物理キーで判定）
+    else if (e.code === 'Digit9' || e.code === 'Digit0'){
+      e.preventDefault();
+      const g = selRect(), ax = e.code === 'Digit9' ? 'r' : 'c';
+      setHidden(ax, ax === 'r' ? g.s.r : g.s.c, ax === 'r' ? g.e.r : g.e.c, !e.shiftKey);
+    }
     else if (k.startsWith('Arrow')){ e.preventDefault(); jump(k, e.shiftKey); }
     return;
   }
