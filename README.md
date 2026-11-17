@@ -27,7 +27,9 @@ PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx
 ### スマートフォン・タブレットで使う
 
 スマートフォンでは、ダウンロードした HTML ファイルをそのまま開けないことがあります（iPhone の「ファイル」アプリはプレビュー表示になり、Android の Chrome は端末内の HTML を開けない場合があります）。
-**GitHub Pages などで公開した URL をブラウザで開く**のが確実です。GitHub Pages の場合、リポジトリの Settings → Pages で公開すると `https://<ユーザー名>.github.io/<リポジトリ名>/xlsx-editor.html` で開けます。
+**GitHub Pages などで公開した URL をブラウザで開く**のが確実です。GitHub Pages の場合、リポジトリの Settings → Pages で公開すると `https://<ユーザー名>.github.io/<リポジトリ名>/xlsx-editor.html` で開けます。`https://<ユーザー名>.github.io/<リポジトリ名>/` を開くと、各エディタへのリンクを並べたトップページ（`index.html`）が表示されます。
+
+公開用に、Jekyll の処理を通さずにそのまま公開するための `.nojekyll` を同梱しています。また、各 HTML ファイルには Content-Security-Policy を設定しており、ページから外部への通信（fetch / XHR など）はブラウザによって禁止されます。
 
 ページを開いたあとは、ファイルの読み込み・編集・保存はすべて端末の中で行われ、ファイルの中身が送信されることはありません。
 
@@ -53,10 +55,39 @@ PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx
 - 範囲選択（ドラッグ、Shift+クリック、Shift+矢印、行・列の見出しのクリック）
 - 範囲のコピー・貼り付け（数式は相対参照をずらして貼り付け。Excel からの複数セルの貼り付けにも対応）
 - 下方向・右方向へのコピー（`Ctrl+D` / `Ctrl+R`）、オート SUM（`Alt+=`）
+- オートフィル（下の「オートフィル」を参照）
 - 右クリックで行・列の挿入と削除（数式やグラフの参照も合わせて調整）
+- 行・列の非表示と再表示（下の「行・列の非表示」を参照）
 - 範囲を選ぶと、ステータスバーに合計・平均・データの個数を表示
 - シートの切り替えと追加
 - シート名の変更（タブをダブルクリック、または右クリック →「シート名の変更」）。ほかのセルの数式やグラフがそのシートを参照していれば、参照先のシート名も合わせて書き換えます
+
+### オートフィル
+
+選択範囲の右下に出る ■（フィルハンドル）を上下左右にドラッグすると、連続したデータを入力できます。
+
+- 数値：1 つなら同じ値をコピー、2 つ以上なら差分（一次式）に合わせて続きを入力
+- 日付：1 日ずつ進めます。2 つ以上の日付が月単位で並んでいれば月単位で進めます
+- 数式：相対参照をずらして入力
+- リスト：曜日（日〜土・日曜日〜土曜日・Sun〜Sat・Sunday〜Saturday）、月（1月〜12月・Jan〜Dec・January〜December）、四半期（第1四半期〜第4四半期）、十二支、十干
+- 数字を含む文字列（「No.1」→「No.2」、「001」の桁数は保持）
+- 複数セルのパターンは繰り返して入力し、選択範囲の内側へドラッグすると、その部分を消去します
+- フィルハンドルをダブルクリックすると、隣の列のデータが続く行まで下方向に入力します
+- ドラッグ中は入力される範囲を表示し、画面の端では自動でスクロールします。`Esc` で中止、`Ctrl+Z` 1 回で取り消せます
+
+### 行・列の非表示
+
+- 行・列の見出しを右クリック →「非表示」「再表示」、または `Ctrl+9` / `Ctrl+0`（行 / 列を非表示）、`Ctrl+Shift+9` / `Ctrl+Shift+0`（再表示）
+- 非表示の行・列があるときは、右クリックメニューの「すべての行・列を再表示」でまとめて戻せます
+- 非表示の場所は見出しの区切り線で示し、矢印キーで移動するときは非表示の行・列を飛ばします
+- 読み込んだファイルで非表示になっている行・列は非表示のまま表示し、保存しても非表示のまま残ります
+- 非表示・再表示は元に戻す・やり直しに対応しています
+
+### 罫線・セルの色
+
+- 「罫線」ボタン：格子・外枠・太い外枠・内側・上下左右・下太罫線・下二重罫線・罫線なし
+- 「セルの色」ボタン：塗りつぶしの色を選択（「塗りつぶしなし」で解除）
+- 既存の xlsx に設定されている罫線・塗りつぶしも表示し、xlsx で保存すると罫線・塗りつぶしを残します
 
 ### 対応している関数
 
@@ -69,6 +100,8 @@ PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx
 | 検索 | VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, ROW, COLUMN, ROWS, COLUMNS |
 | 文字列 | LEN, LEFT, RIGHT, MID, UPPER, LOWER, PROPER, TRIM, CONCAT, CONCATENATE, TEXTJOIN, SUBSTITUTE, FIND, SEARCH, REPT, VALUE, TEXT, EXACT |
 | 日付・時刻 | TODAY, NOW, DATE, YEAR, MONTH, DAY, WEEKDAY, TIME, HOUR, MINUTE, SECOND, EDATE, EOMONTH, DATEDIF |
+
+TEXT 関数とセルの表示形式では、日本語版 Excel の曜日の書式 `aaa`（月）・`aaaa`（月曜日）にも対応しています。
 
 未対応の関数を含むセルは、ファイルに保存されていた値をそのまま表示します（点線の下線で表示し、ステータスバーでもお知らせします）。
 
@@ -107,6 +140,9 @@ PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx
 | Ctrl + C / X / V | コピー / 切り取り / 貼り付け |
 | Ctrl + D / Ctrl + R | 下方向 / 右方向へコピー |
 | Alt + = | オート SUM |
+| Ctrl + 9 / Ctrl + 0 | 行 / 列を非表示 |
+| Ctrl + Shift + 9 / Ctrl + Shift + 0 | 行 / 列を再表示 |
+| Esc（フィルハンドルのドラッグ中） | オートフィルを中止 |
 | Ctrl + Z / Ctrl + Y | 元に戻す / やり直し |
 | F9 | すべての数式を再計算 |
 | Ctrl + S / Ctrl + Shift + S | 保存 / 名前を付けて保存 |
@@ -114,8 +150,8 @@ PowerPoint（.pptx / .ppt）を編集できる `pptx-editor.html`、Word（.docx
 
 ## 制限事項
 
-- **xls 形式で保存すると、数式・画像・グラフは保存されません**（数式は計算結果の値だけが残ります）。保存前に確認メッセージが表示されます。
-- **セルの書式（色・罫線・フォントなど）は、保存すると失われます。**
+- **xls 形式で保存すると、数式・画像・グラフ・罫線・セルの色は保存されません**（数式は計算結果の値だけが残ります）。保存前に確認メッセージが表示されます。
+- **罫線・塗りつぶしの色以外のセルの書式（フォント・文字の色・配置など）は、保存すると失われます。**
 - Excel で作成されたグラフは、移動・サイズ変更・削除のみできます（内容の編集はできません）。ブラウザ上の表示は近い見た目で、Excel と完全には同じになりません。また、行・列を挿入・削除しても、これらのグラフの参照範囲は調整されません。
 - セルの結合の表示、図形・SmartArt の表示、条件付き書式、ピボットテーブル、マクロの実行には対応していません（図形などは保存時にそのまま残ります）。
 - 配列数式・名前付き範囲・INDIRECT / OFFSET などは計算できません（ファイルに保存されていた値を表示します）。
@@ -530,12 +566,12 @@ Word や Web ページからの貼り付けにも対応しています（不要�
 
 ## ライセンス
 
-`xlsx-editor.html`・`html-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` は、MIT License です。
+`xlsx-editor.html`・`html-editor.html` の本体のコード（ライブラリ以外の部分）と `pptx-editor.html`・`docx-editor.html`・`video-editor.html`・`audio-editor.html`・`image-editor.html` は、MIT License です（全文は [LICENSE](LICENSE) にもあります）。
 
 ```
 MIT License
 
-Copyright (c) 2026 OkiaYoshisada
+Copyright (c) 2026 notRealty
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
