@@ -750,7 +750,7 @@ const FN = {
       const re = new RegExp(wildcard(f).source.slice(1, -1), 'i'); const m = re.exec(t.slice(st - 1)); if (!m) throw E('#VALUE!'); return m.index + st; },
   REPT: (a, s) => str(V(a[0], s)).repeat(Math.max(0, num(V(a[1], s)))),
   VALUE: (a, s) => num(V(a[0], s)),
-  TEXT: (a, s) => { const v = V(a[0], s), f = str(V(a[1], s)); try { return XLSX.SSF.format(f, typeof v === 'string' && isFinite(Number(v)) ? Number(v) : v); } catch { throw E('#VALUE!'); } },
+  TEXT: (a, s) => { const v = V(a[0], s), f = str(V(a[1], s)); try { return ssfFormat(f, typeof v === 'string' && isFinite(Number(v)) ? Number(v) : v); } catch { throw E('#VALUE!'); } },
 
   TODAY: () => { const d = new Date(); return serial(d.getFullYear(), d.getMonth() + 1, d.getDate()); },
   NOW: () => { const d = new Date(); return serial(d.getFullYear(), d.getMonth() + 1, d.getDate()) + (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400; },
@@ -993,6 +993,30 @@ function fmtGeneral(v){
   if (a !== 0 && (a < 1e-9 || a >= 1e15)) return v.toExponential(5).replace(/\.?0+e/, 'E');
   return String(Number(v.toPrecision(11)));
 }
+// SheetJS の SSF は日本語版 Excel の曜日書式 aaa（月）/ aaaa（月曜日）に未対応のため、
+// 書式文字列中の aaa / aaaa（引用符・エスケープ・[...] の外側のみ）を曜日のリテラルに置き換えてから渡す
+const JP_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+function ssfFormat(fmt, v){
+  if (typeof v === 'number' && isFinite(v) && /a{3}/i.test(fmt)){
+    const wd = JP_WEEKDAYS[((Math.floor(v) + 6) % 7 + 7) % 7];   // シリアル値 1 = 1900/1/1（日曜）
+    let out = '', i = 0;
+    while (i < fmt.length){
+      const c = fmt[i];
+      if (c === '"'){ const j = fmt.indexOf('"', i + 1); const e = j < 0 ? fmt.length : j + 1; out += fmt.slice(i, e); i = e; }
+      else if (c === '\\' || c === '_' || c === '*'){ out += fmt.slice(i, i + 2); i += 2; }
+      else if (c === '['){ const j = fmt.indexOf(']', i + 1); const e = j < 0 ? fmt.length : j + 1; out += fmt.slice(i, e); i = e; }
+      else if (c === 'a' || c === 'A'){
+        let j = i; while (j < fmt.length && (fmt[j] === 'a' || fmt[j] === 'A')) j++;
+        const n = j - i;
+        out += n >= 4 ? '"' + wd + '曜日"' : n === 3 ? '"' + wd + '"' : fmt.slice(i, j);
+        i = j;
+      }
+      else { out += c; i++; }
+    }
+    fmt = out;
+  }
+  return XLSX.SSF.format(fmt, v);
+}
 function display(cell){
   if (!cell) return ['', ''];
   if (cell.t === 'e') return [cell.w || ERRNAME[cell.v] || '#VALUE!', 'e'];
@@ -1001,7 +1025,7 @@ function display(cell){
   if (cell.w != null) return [cell.w, cls];
   if (cell.t === 'b') return [cell.v ? 'TRUE' : 'FALSE', cls];
   if (cell.t === 'n'){
-    if (cell.z && cell.z !== 'General'){ try { return [XLSX.SSF.format(cell.z, cell.v), cls]; } catch {} }
+    if (cell.z && cell.z !== 'General'){ try { return [ssfFormat(cell.z, cell.v), cls]; } catch {} }
     return [fmtGeneral(cell.v), cls];
   }
   return [String(cell.v), cls];
