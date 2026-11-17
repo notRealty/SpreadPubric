@@ -37,6 +37,9 @@ td.stale{color:var(--stale);text-decoration:underline dotted}
 td.sel{outline:2px solid var(--sel);outline-offset:-2px;background:var(--selbg)}
 th.hl{background:var(--selbg);color:var(--fg)}
 #rangeBox{position:absolute;display:none;border:1px solid var(--sel);background:var(--rng);pointer-events:none;z-index:1}
+#fillHandle{position:absolute;display:none;width:7px;height:7px;margin:-4px 0 0 -4px;background:var(--sel);border:1px solid var(--bg);cursor:crosshair;z-index:4;touch-action:none}
+#fillBox{position:absolute;display:none;border:2px dashed var(--muted);pointer-events:none;z-index:3}
+body.touch #fillHandle{width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;border-width:2px}
 #objs{position:absolute;left:0;top:0;width:0;height:0;z-index:2}
 .obj{position:absolute;cursor:move;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
 .obj img{display:block;width:100%;height:100%;pointer-events:none;user-select:none}
@@ -133,6 +136,8 @@ body.touch #editor,body.touch #finput,body.touch dialog input,body.touch dialog 
 <div id="wrap">
   <table id="grid"></table>
   <div id="rangeBox"></div>
+  <div id="fillBox"></div>
+  <div id="fillHandle" title="ドラッグでオートフィル（ダブルクリックで下へ自動入力）"></div>
   <div id="objs"></div>
   <input id="editor" spellcheck="false" autocomplete="off">
 </div>
@@ -1346,6 +1351,7 @@ function extendTo(r, c){
   $('#addr').value = isMulti() ? `${rg.e.r - rg.s.r + 1}R x ${rg.e.c - rg.s.c + 1}C` : enc(sel.r, sel.c);
 }
 function positionRangeBox(){
+  positionFillHandle();
   if (!isMulti()){ rangeBox.style.display = 'none'; return; }
   const rg = selRect();
   const x1 = geo.cx[rg.s.c], y1 = geo.ry[rg.s.r], x2 = geo.cx[Math.min(rg.e.c + 1, nCols)], y2 = geo.ry[Math.min(rg.e.r + 1, nRows)];
@@ -1396,6 +1402,7 @@ function startEdit(mode, text){
   editing = mode;
   if (text != null) editor.value = text;
   editor.classList.add('on');
+  positionFillHandle();
   placeEditor();
   focusGrid();
   const n = editor.value.length; editor.setSelectionRange(n, n);
@@ -1404,6 +1411,7 @@ function startEdit(mode, text){
 function cancelEdit(){
   editing = null; editor.value = ''; editor.classList.remove('on');
   barActive = false;
+  if (geo) positionFillHandle();
   if (wb && wb.Sheets[cur]) finput.value = editText(wb.Sheets[cur][enc(sel.r, sel.c)]);
 }
 function commitAll(){
@@ -1591,6 +1599,215 @@ function autoSum(){
   startEdit('edit', f);
   if (f === '=SUM()') editor.setSelectionRange(5, 5);
 }
+
+/* ---------- オートフィル（フィルハンドルのドラッグ） ---------- */
+// 連続データとして扱うリスト（Excel の既定のユーザー設定リストに相当）
+const FILL_LISTS = [
+  ['日', '月', '火', '水', '木', '金', '土'],
+  ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'],
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+  ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+  ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+  ['第1四半期', '第2四半期', '第3四半期', '第4四半期'],
+  ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'],
+  ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'],
+];
+const FILL_LIST_IDX = new Map();
+FILL_LISTS.forEach((l, i) => l.forEach((s, j) => { if (!FILL_LIST_IDX.has(s)) FILL_LIST_IDX.set(s, [i, j]); }));
+const RE_NUMTEXT = /^(.*?)(\d+)(\D*)$/;
+const isDateCell = x => !!x.z && x.z !== 'General' && (() => { try { return XLSX.SSF.is_date(x.z); } catch { return false; } })();
+const tidy = v => Number(v.toPrecision(15));   // 0.1 刻みなどの浮動小数点誤差を丸める
+// セルの種類を判定。同じ key が連続する元セルを 1 つの系列として増分を求める
+function fillKind(x){
+  if (!x || x.v == null || x.v === '') return {key:null};
+  if (x.f) return {key:null};
+  if (x.t === 'n') return isDateCell(x) ? {key:'D', v:x.v} : {key:'N', v:x.v};
+  if (x.t === 's' && typeof x.v === 'string'){
+    const li = FILL_LIST_IDX.get(x.v);
+    if (li) return {key:'L' + li[0], v:li[1], list:li[0]};
+    const m = RE_NUMTEXT.exec(x.v);
+    if (m) return {key:'T' + m[1] + '\u0000' + m[3], v:+m[2], pre:m[1], suf:m[3], w:m[2].length};
+  }
+  return {key:null};
+}
+// 最小二乗法で一次式を当てはめる（Excel の連続データと同じ考え方）
+function linFit(vals){
+  const m = vals.length;
+  if (m === 1) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  vals.forEach((y, x) => { sx += x; sy += y; sxx += x * x; sxy += x * y; });
+  const b = (m * sxy - sx * sy) / (m * sxx - sx * sx), a = (sy - b * sx) / m;
+  return x => a + b * x;
+}
+// 日付の系列：日が同じで月が一定間隔なら月単位、それ以外は日数の一次式
+function dateFit(vals){
+  if (vals.length === 1) return x => vals[0] + x;
+  const ds = vals.map(v => ymd(v));
+  if (vals.every(v => Number.isInteger(v)) && ds.every(d => d.d === ds[0].d)){
+    const ms = ds.map(d => d.y * 12 + d.m - 1), step = ms[1] - ms[0];
+    if (step && ms.every((m, i) => i === 0 || m - ms[i - 1] === step)){
+      const day = ds[0].d;
+      return x => { const mi = ms[0] + step * x, y = Math.floor(mi / 12), mo = mi - y * 12 + 1;
+        return serial(y, mo, Math.min(day, new Date(Date.UTC(y, mo, 0)).getUTCDate())); };
+    }
+  }
+  return linFit(vals);
+}
+// srcs: フィル方向の順に並べた元セル（上・左へのフィルでは逆順）。count 個の値を作る
+// 戻り値の各要素は {cell, j}（j は元にした srcs の添字。数式の参照をずらすのに使う）
+function fillSeries(srcs, count){
+  const n = srcs.length, kinds = srcs.map(fillKind);
+  // 同じ key が連続する範囲をグループにまとめ、グループごとに当てはめ関数を作る
+  const grp = new Array(n);
+  for (let j = 0; j < n;){
+    let k = j; while (k + 1 < n && kinds[k + 1].key && kinds[k + 1].key === kinds[j].key) k++;
+    const g = {start:j, m:k - j + 1, kind:kinds[j]};
+    const vals = kinds.slice(j, k + 1).map(t => t.v);
+    if (g.kind.key === 'D') g.fn = dateFit(vals);
+    else if (g.kind.key){
+      // 数値 1 つだけを単独でフィルした場合は Excel と同じくコピー
+      if (g.kind.key === 'N' && n === 1) g.kind = {key:null};
+      else g.fn = linFit(vals) || (x => vals[0] + x);
+    }
+    for (let t = j; t <= k; t++) grp[t] = g;
+    j = k + 1;
+  }
+  const out = [];
+  for (let i = 0; i < count; i++){
+    const j = i % n, q = Math.floor(i / n) + 1, g = grp[j], src = srcs[j];
+    if (!g.kind.key){ out.push({cell:src, j, copy:true}); continue; }
+    const v = g.fn(j - g.start + q * g.m), k = g.kind, c = {...src};
+    delete c.w; delete c.r; delete c.h;
+    if (k.key === 'N' || k.key === 'D') c.v = tidy(v);
+    else if (k.list != null){ const L = FILL_LISTS[k.list]; c.v = L[((Math.round(v) % L.length) + L.length) % L.length]; }
+    else c.v = k.pre + String(Math.abs(Math.round(v))).padStart(k.w, '0') + k.suf;
+    out.push({cell:c, j});
+  }
+  return out;
+}
+// src: 元の範囲, dir: 'down' | 'up' | 'right' | 'left', count: 増やすセル数（負なら範囲を縮めて消去）
+function autoFill(src, dir, count){
+  commitAll();
+  if (!count) return;
+  const ws = wb.Sheets[cur], list = [], vert = dir === 'down' || dir === 'up';
+  const u = {s:{...src.s}, e:{...src.e}};
+  if (count < 0){
+    // 範囲の内側へドラッグ：はみ出した部分を消去（Excel と同じ）
+    const k = -count;
+    const rg = vert ? {s:{r:src.e.r - k + 1, c:src.s.c}, e:{...src.e}} : {s:{r:src.s.r, c:src.e.c - k + 1}, e:{...src.e}};
+    cellsIn(rg, (r, c) => list.push({r, c, cell:null}));
+    if (vert) u.e.r -= k; else u.e.c -= k;
+  } else {
+    const lines = vert ? [src.s.c, src.e.c] : [src.s.r, src.e.r];
+    const len = vert ? src.e.r - src.s.r + 1 : src.e.c - src.s.c + 1;
+    const fwd = dir === 'down' || dir === 'right';
+    for (let L = lines[0]; L <= lines[1]; L++){
+      // 元セルをフィル方向の順に並べる
+      const pos = [];
+      for (let t = 0; t < len; t++) pos.push(fwd ? t : len - 1 - t);
+      const at = t => vert ? [src.s.r + t, L] : [L, src.s.c + t];
+      const srcs = pos.map(t => { const [r, c] = at(t); return ws[enc(r, c)] || null; });
+      fillSeries(srcs, count).forEach((o, i) => {
+        const [sr, sc] = at(pos[o.j]);
+        const step = fwd ? len + i : -(i + 1);
+        const [r, c] = at(step);
+        const cell = o.copy ? moveCell(o.cell, r - sr, c - sc) : o.cell;
+        list.push({r, c, cell});
+      });
+    }
+    if (dir === 'down') u.e.r += count; else if (dir === 'up') u.s.r -= count;
+    else if (dir === 'right') u.e.c += count; else u.s.c -= count;
+  }
+  if (list.length) setCells(list);
+  select(u.s.r, u.s.c);
+  if (u.e.r !== u.s.r || u.e.c !== u.s.c) extendTo(u.e.r, u.e.c);
+}
+const fillHandle = $('#fillHandle'), fillBox = $('#fillBox');
+function positionFillHandle(){
+  if (!geo || editing || !wb){ fillHandle.style.display = 'none'; return; }
+  const rg = selRect();
+  const x = geo.cx[Math.min(rg.e.c + 1, nCols)], y = geo.ry[Math.min(rg.e.r + 1, nRows)];
+  fillHandle.style.cssText = `display:block;left:${x}px;top:${y}px`;
+}
+// ドラッグ位置からフィル先を決める（縦横のうち、元の範囲から遠く離れた方向へ）
+function fillTarget(src, r, c){
+  const dDown = r - src.e.r, dUp = src.s.r - r, dRight = c - src.e.c, dLeft = src.s.c - c;
+  const v = Math.max(dDown, dUp, 0), h = Math.max(dRight, dLeft, 0);
+  if (v === 0 && h === 0){
+    // 範囲の内側：縮める（消去）方向。下端・右端からの距離が大きい方
+    const ur = src.e.r - r, uc = src.e.c - c;
+    if (ur <= 0 && uc <= 0) return null;
+    return ur >= uc ? {dir:'down', count:-ur} : {dir:'right', count:-uc};
+  }
+  if (v >= h) return dDown > 0 ? {dir:'down', count:dDown} : {dir:'up', count:Math.min(dUp, src.s.r)};
+  return dRight > 0 ? {dir:'right', count:dRight} : {dir:'left', count:Math.min(dLeft, src.s.c)};
+}
+function showFillBox(src, t){
+  if (!t || !t.count){ fillBox.style.display = 'none'; return; }
+  const u = {s:{...src.s}, e:{...src.e}};
+  if (t.count < 0){ if (t.dir === 'down') u.e.r += t.count; else u.e.c += t.count; }
+  else if (t.dir === 'down') u.e.r += t.count; else if (t.dir === 'up') u.s.r -= t.count;
+  else if (t.dir === 'right') u.e.c += t.count; else u.s.c -= t.count;
+  if (u.e.r < u.s.r || u.e.c < u.s.c){ fillBox.style.display = 'none'; return; }
+  ensureSize(u.e.r + 1, u.e.c + 1);
+  const x1 = geo.cx[u.s.c], y1 = geo.ry[u.s.r], x2 = geo.cx[Math.min(u.e.c + 1, nCols)], y2 = geo.ry[Math.min(u.e.r + 1, nRows)];
+  fillBox.style.cssText = `display:block;left:${x1}px;top:${y1}px;width:${x2 - x1}px;height:${y2 - y1}px`;
+}
+let fillDrag = null;
+function fillDragUpdate(){
+  if (!fillDrag) return;
+  const b = wrap.getBoundingClientRect(), {x, y} = fillDrag;
+  // 端に近づいたら自動スクロール
+  const sp = 24;
+  if (y > b.bottom - sp) wrap.scrollTop += Math.min(40, y - (b.bottom - sp));
+  else if (y < b.top + grid.tHead.offsetHeight + sp) wrap.scrollTop -= Math.min(40, b.top + grid.tHead.offsetHeight + sp - y);
+  if (x > b.right - sp) wrap.scrollLeft += Math.min(40, x - (b.right - sp));
+  else if (x < b.left + 48 + sp) wrap.scrollLeft -= Math.min(40, b.left + 48 + sp - x);
+  const a = pxToAnchor(x - b.left + wrap.scrollLeft - wrap.clientLeft, y - b.top + wrap.scrollTop - wrap.clientTop);
+  fillDrag.target = fillTarget(fillDrag.src, a.r, a.c);
+  showFillBox(fillDrag.src, fillDrag.target);
+  fillDrag.raf = requestAnimationFrame(fillDragUpdate);
+}
+function endFillDrag(apply){
+  if (!fillDrag) return;
+  cancelAnimationFrame(fillDrag.raf);
+  const {src, target} = fillDrag;
+  fillDrag = null; fillBox.style.display = 'none';
+  if (apply && target) autoFill(src, target.dir, target.count);
+  focusGrid();
+}
+fillHandle.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  commitAll(); selectObj(null); hideMenu();
+  fillHandle.setPointerCapture(e.pointerId);
+  fillDrag = {src:selRect(), x:e.clientX, y:e.clientY, target:null};
+  fillDrag.raf = requestAnimationFrame(fillDragUpdate);
+});
+fillHandle.addEventListener('pointermove', e => { if (fillDrag){ fillDrag.x = e.clientX; fillDrag.y = e.clientY; } });
+fillHandle.addEventListener('pointerup', () => endFillDrag(true));
+fillHandle.addEventListener('pointercancel', () => endFillDrag(false));
+fillHandle.addEventListener('mousedown', e => e.stopPropagation());
+window.addEventListener('keydown', e => { if (fillDrag && e.key === 'Escape'){ e.preventDefault(); endFillDrag(false); } }, true);
+// ダブルクリック：隣の列のデータが続く行まで下へフィル
+fillHandle.addEventListener('dblclick', e => {
+  e.preventDefault(); e.stopPropagation();
+  const src = selRect(), ws = wb.Sheets[cur];
+  const has = (r, c) => { const x = c >= 0 && ws[enc(r, c)]; return !!x && x.v != null && x.v !== ''; };
+  // 左隣、右隣の順に、選択範囲の最終行から横に続くデータの列を探し、その中で下にデータが続く列を使う
+  const cand = [];
+  for (let c = src.s.c - 1; c >= 0 && (c === src.s.c - 1 || has(src.e.r, c)); c--) cand.push(c);
+  for (let c = src.e.c + 1; c <= src.e.c + 50 && (c === src.e.c + 1 || has(src.e.r, c)); c++) cand.push(c);
+  let last = src.e.r;
+  for (const c of cand){
+    if (!has(src.e.r + 1, c)) continue;
+    while (has(last + 1, c)) last++;
+    break;
+  }
+  if (last > src.e.r) autoFill(src, 'down', last - src.e.r);
+});
 
 /* ---------- 罫線・セルの色 ---------- */
 // ws['!borders'] = {A1: {left, right, top, bottom}}。各辺は {style, color}（color は styles.xml の <color> の属性。省略時は自動）
