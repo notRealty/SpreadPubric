@@ -36,7 +36,12 @@ td.e{color:var(--err)}
 td.stale{color:var(--stale);text-decoration:underline dotted}
 td.sel{outline:2px solid var(--sel);outline-offset:-2px;background:var(--selbg)}
 th.hl{background:var(--selbg);color:var(--fg)}
+thead th.hb{box-shadow:inset 3px 0 0 var(--muted)}
+tbody th.hb{box-shadow:inset 0 3px 0 var(--muted)}
 #rangeBox{position:absolute;display:none;border:1px solid var(--sel);background:var(--rng);pointer-events:none;z-index:1}
+#fillHandle{position:absolute;display:none;width:7px;height:7px;margin:-4px 0 0 -4px;background:var(--sel);border:1px solid var(--bg);cursor:crosshair;z-index:4;touch-action:none}
+#fillBox{position:absolute;display:none;border:2px dashed var(--muted);pointer-events:none;z-index:3}
+body.touch #fillHandle{width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;border-width:2px}
 #objs{position:absolute;left:0;top:0;width:0;height:0;z-index:2}
 .obj{position:absolute;cursor:move;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
 .obj img{display:block;width:100%;height:100%;pointer-events:none;user-select:none}
@@ -133,6 +138,8 @@ body.touch #editor,body.touch #finput,body.touch dialog input,body.touch dialog 
 <div id="wrap">
   <table id="grid"></table>
   <div id="rangeBox"></div>
+  <div id="fillBox"></div>
+  <div id="fillHandle" title="ドラッグでオートフィル（ダブルクリックで下へ自動入力）"></div>
   <div id="objs"></div>
   <input id="editor" spellcheck="false" autocomplete="off">
 </div>
@@ -750,7 +757,7 @@ const FN = {
       const re = new RegExp(wildcard(f).source.slice(1, -1), 'i'); const m = re.exec(t.slice(st - 1)); if (!m) throw E('#VALUE!'); return m.index + st; },
   REPT: (a, s) => str(V(a[0], s)).repeat(Math.max(0, num(V(a[1], s)))),
   VALUE: (a, s) => num(V(a[0], s)),
-  TEXT: (a, s) => { const v = V(a[0], s), f = str(V(a[1], s)); try { return XLSX.SSF.format(f, typeof v === 'string' && isFinite(Number(v)) ? Number(v) : v); } catch { throw E('#VALUE!'); } },
+  TEXT: (a, s) => { const v = V(a[0], s), f = str(V(a[1], s)); try { return ssfFormat(f, typeof v === 'string' && isFinite(Number(v)) ? Number(v) : v); } catch { throw E('#VALUE!'); } },
 
   TODAY: () => { const d = new Date(); return serial(d.getFullYear(), d.getMonth() + 1, d.getDate()); },
   NOW: () => { const d = new Date(); return serial(d.getFullYear(), d.getMonth() + 1, d.getDate()) + (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400; },
@@ -993,6 +1000,30 @@ function fmtGeneral(v){
   if (a !== 0 && (a < 1e-9 || a >= 1e15)) return v.toExponential(5).replace(/\.?0+e/, 'E');
   return String(Number(v.toPrecision(11)));
 }
+// SheetJS の SSF は日本語版 Excel の曜日書式 aaa（月）/ aaaa（月曜日）に未対応のため、
+// 書式文字列中の aaa / aaaa（引用符・エスケープ・[...] の外側のみ）を曜日のリテラルに置き換えてから渡す
+const JP_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+function ssfFormat(fmt, v){
+  if (typeof v === 'number' && isFinite(v) && /a{3}/i.test(fmt)){
+    const wd = JP_WEEKDAYS[((Math.floor(v) + 6) % 7 + 7) % 7];   // シリアル値 1 = 1900/1/1（日曜）
+    let out = '', i = 0;
+    while (i < fmt.length){
+      const c = fmt[i];
+      if (c === '"'){ const j = fmt.indexOf('"', i + 1); const e = j < 0 ? fmt.length : j + 1; out += fmt.slice(i, e); i = e; }
+      else if (c === '\\' || c === '_' || c === '*'){ out += fmt.slice(i, i + 2); i += 2; }
+      else if (c === '['){ const j = fmt.indexOf(']', i + 1); const e = j < 0 ? fmt.length : j + 1; out += fmt.slice(i, e); i = e; }
+      else if (c === 'a' || c === 'A'){
+        let j = i; while (j < fmt.length && (fmt[j] === 'a' || fmt[j] === 'A')) j++;
+        const n = j - i;
+        out += n >= 4 ? '"' + wd + '曜日"' : n === 3 ? '"' + wd + '"' : fmt.slice(i, j);
+        i = j;
+      }
+      else { out += c; i++; }
+    }
+    fmt = out;
+  }
+  return XLSX.SSF.format(fmt, v);
+}
 function display(cell){
   if (!cell) return ['', ''];
   if (cell.t === 'e') return [cell.w || ERRNAME[cell.v] || '#VALUE!', 'e'];
@@ -1001,7 +1032,7 @@ function display(cell){
   if (cell.w != null) return [cell.w, cls];
   if (cell.t === 'b') return [cell.v ? 'TRUE' : 'FALSE', cls];
   if (cell.t === 'n'){
-    if (cell.z && cell.z !== 'General'){ try { return [XLSX.SSF.format(cell.z, cell.v), cls]; } catch {} }
+    if (cell.z && cell.z !== 'General'){ try { return [ssfFormat(cell.z, cell.v), cls]; } catch {} }
     return [fmtGeneral(cell.v), cls];
   }
   return [String(cell.v), cls];
@@ -1113,21 +1144,108 @@ function showSheet(name){
 function colWidth(ws, c){
   const x = (ws['!cols'] || [])[c];
   let w = DEF_COLW;
-  if (x){ if (x.hidden) w = 6; else if (x.wpx) w = x.wpx; else if (x.wch) w = Math.round(x.wch * 7 + 5); else if (x.width) w = Math.round(x.width * 7); }
+  if (x){ if (x.wpx) w = x.wpx; else if (x.wch) w = Math.round(x.wch * 7 + 5); else if (x.width) w = Math.round(x.width * 7); }
   return Math.max(6, Math.min(w, 600));
+}
+/* ---------- 行・列の表示／非表示 ---------- */
+// 幅・高さ 0 で保存されたものも非表示として扱う
+const colHidden = (ws, c) => { const x = (ws['!cols'] || [])[c]; return !!(x && (x.hidden || x.width === 0 || x.wpx === 0 || x.wch === 0)); };
+const rowHidden = (ws, r) => { const x = (ws['!rows'] || [])[r]; return !!(x && (x.hidden || x.hpx === 0 || x.hpt === 0)); };
+let hidR = [], hidC = [];
+const hidCss = document.head.appendChild(document.createElement('style'));
+// v から step 方向に最も近い表示中の行（列）。端まで非表示なら逆方向に探す
+function visIdx(v, step, hid){
+  let i = Math.max(0, v);
+  while (i >= 0 && hid(i)) i += step;
+  if (i >= 0) return i;
+  i = Math.max(0, v); while (hid(i)) i -= step;
+  return i;
+}
+const visR = (r, step) => visIdx(r, step || 1, i => rowHidden(wb.Sheets[cur], i));
+const visC = (c, step) => visIdx(c, step || 1, i => colHidden(wb.Sheets[cur], i));
+function setHidden(axis, a, b, hide){
+  commitAll();
+  const ws = wb.Sheets[cur], dim = axis === 'c' ? '!cols' : '!rows', isHid = axis === 'c' ? colHidden : rowHidden;
+  const n = axis === 'c' ? nCols : nRows, name = axis === 'c' ? '列' : '行';
+  if (hide){
+    let vis = 0; for (let i = 0; i < n; i++) if (!(i >= a && i <= b) && !isHid(ws, i)) vis++;
+    if (!vis){ setStatus(`すべての${name}を非表示にすることはできません`, true); return; }
+  }
+  const before = JSON.parse(JSON.stringify(ws[dim] || []));
+  const arr = ws[dim] || (ws[dim] = []);
+  let cnt = 0;
+  for (let i = a; i <= b; i++){
+    if (isHid(ws, i) === hide) continue;
+    cnt++;
+    if (hide){ arr[i] = {...(arr[i] || {}), hidden:true}; continue; }
+    const x = {...arr[i]}; delete x.hidden;
+    if (axis === 'c' && (x.width === 0 || x.wpx === 0 || x.wch === 0)){ delete x.width; delete x.wpx; delete x.wch; }
+    if (axis === 'r' && (x.hpx === 0 || x.hpt === 0)){ delete x.hpx; delete x.hpt; }
+    arr[i] = Object.keys(x).some(k => k !== 'MDW') ? x : undefined;
+  }
+  if (!cnt){ setStatus(hide ? `選択した${name}はすでに非表示です` : `選択範囲に非表示の${name}はありません`); return; }
+  const after = JSON.parse(JSON.stringify(arr));
+  undoStack.push({kind:'dims', sheet:cur, dim, before, after}); redoStack.length = 0;
+  refreshDims(!hide);
+  markDirty();
+  setStatus(`${cnt} ${name}を${hide ? '非表示に' : '再表示'}しました`);
+}
+function unhideAll(){
+  commitAll();
+  const ws = wb.Sheets[cur], st = {};
+  for (const dim of ['!cols', '!rows']) st[dim] = JSON.parse(JSON.stringify(ws[dim] || []));
+  const fix = (dim, isHid) => { const arr = ws[dim] || []; for (let i = 0; i < arr.length; i++) if (arr[i] && isHid(ws, i)){
+    const x = {...arr[i]}; delete x.hidden;
+    for (const k of ['width', 'wpx', 'wch', 'hpx', 'hpt']) if (x[k] === 0) delete x[k];
+    arr[i] = Object.keys(x).some(k => k !== 'MDW') ? x : undefined; } };
+  fix('!cols', colHidden); fix('!rows', rowHidden);
+  undoStack.push({kind:'dims', sheet:cur, dims:st, after:{'!cols':JSON.parse(JSON.stringify(ws['!cols'] || [])), '!rows':JSON.parse(JSON.stringify(ws['!rows'] || []))}}); redoStack.length = 0;
+  refreshDims(true);
+  markDirty();
+  setStatus('すべての行・列を再表示しました');
+}
+// 元に戻す・やり直し
+function applyDims(e, which){
+  const ws = wb.Sheets[e.sheet]; if (!ws) return;
+  if (e.dims){ const st = which === 'before' ? e.dims : e.after; for (const d in st) ws[d] = JSON.parse(JSON.stringify(st[d])); }
+  else ws[e.dim] = JSON.parse(JSON.stringify(e[which]));
+  if (e.sheet !== cur) showSheet(e.sheet); else refreshDims(true);
+  markDirty();
+}
+// 再描画して選択を表示中のセルに戻す。keepRange なら範囲選択も保つ
+function refreshDims(keepRange){
+  const s = {...sel}, k = {...corner};
+  render(); select(s.r, s.c);
+  if (keepRange && (k.r !== s.r || k.c !== s.c)){ corner = k; positionRangeBox(); updateAgg(); }
+}
+function anyHidden(ws, axis, a, b){
+  const isHid = axis === 'c' ? colHidden : rowHidden;
+  for (let i = a; i <= b; i++) if (isHid(ws, i)) return true;
+  return false;
+}
+function sheetHasHidden(ws){
+  return (ws['!cols'] || []).some((x, i) => x && colHidden(ws, i)) || (ws['!rows'] || []).some((x, i) => x && rowHidden(ws, i));
 }
 function render(){
   const ws = wb.Sheets[cur], ri = ws['!rows'] || [];
   const hasBd = STYLE_KEYS.some(p => ws[p] && Object.keys(ws[p]).length > 0);
+  hidC = []; hidR = [];
+  for (let c = 0; c < nCols; c++) hidC[c] = colHidden(ws, c);
+  for (let r = 0; r < nRows; r++) hidR[r] = rowHidden(ws, r);
+  // 非表示の列は col とその列のセルをまとめて表から外す（行は tr に直接指定）
+  const css = [];
+  for (let c = 0; c < nCols; c++) if (hidC[c]) css.push(`#grid col:nth-child(${c + 2}),#grid tr>:nth-child(${c + 2})`);
+  hidCss.textContent = css.length ? css.join(',') + '{display:none}' : '';
   const h = [];
   h.push('<colgroup><col style="width:48px">');
   for (let c = 0; c < nCols; c++) h.push(`<col style="width:${colWidth(ws, c)}px">`);
   h.push('</colgroup><thead><tr><th class="corner"></th>');
-  for (let c = 0; c < nCols; c++) h.push('<th>' + XLSX.utils.encode_col(c) + '</th>');
+  for (let c = 0; c < nCols; c++) h.push(`<th${c > 0 && hidC[c - 1] && !hidC[c] ? ' class="hb" title="左に非表示の列があります"' : ''}>` + XLSX.utils.encode_col(c) + '</th>');
   h.push('</tr></thead><tbody>');
   for (let r = 0; r < nRows; r++){
-    const x = ri[r], hp = x && !x.hidden && (x.hpx || (x.hpt && x.hpt * 4 / 3));
-    h.push(`<tr${hp ? ` style="height:${Math.round(hp)}px"` : ''}><th>${r + 1}</th>`);
+    const x = ri[r], hp = x && !hidR[r] && (x.hpx || (x.hpt && x.hpt * 4 / 3));
+    const hb = r > 0 && hidR[r - 1] && !hidR[r];
+    h.push(`<tr${hidR[r] ? ' style="display:none"' : hp ? ` style="height:${Math.round(hp)}px"` : ''}><th${hb ? ' class="hb" title="上に非表示の行があります"' : ''}>${r + 1}</th>`);
     for (let c = 0; c < nCols; c++){
       const k = enc(r, c), cell = ws[k], bs = hasBd ? cellCss(ws, r, c) : '';
       const st = bs ? ` style="${bs}"` : '';
@@ -1145,12 +1263,16 @@ function render(){
 }
 // セル境界のピクセル位置（図形の配置に使う）
 function computeGeo(){
-  const body = grid.tBodies[0], first = body.rows[0];
-  const cx = [], ry = [];
-  for (let c = 0; c < nCols; c++) cx.push(first.cells[c + 1].offsetLeft);
-  const lc = first.cells[nCols]; cx.push(lc.offsetLeft + lc.offsetWidth);
-  for (let r = 0; r < nRows; r++) ry.push(body.rows[r].offsetTop);
-  const lr = body.rows[nRows - 1]; ry.push(lr.offsetTop + lr.offsetHeight);
+  // 非表示の行・列は幅 0 として、次に表示されている行・列と同じ位置にする
+  const body = grid.tBodies[0];
+  let fr = 0; while (fr < nRows - 1 && hidR[fr]) fr++;
+  const first = body.rows[fr], cx = new Array(nCols + 1), ry = new Array(nRows + 1);
+  let lc = nCols - 1; while (lc >= 0 && hidC[lc]) lc--;
+  cx[nCols] = lc >= 0 ? first.cells[lc + 1].offsetLeft + first.cells[lc + 1].offsetWidth : first.cells[0].offsetWidth;
+  for (let c = nCols - 1; c >= 0; c--) cx[c] = hidC[c] ? cx[c + 1] : first.cells[c + 1].offsetLeft;
+  let lr = nRows - 1; while (lr >= 0 && hidR[lr]) lr--;
+  ry[nRows] = lr >= 0 ? body.rows[lr].offsetTop + body.rows[lr].offsetHeight : grid.tHead.offsetHeight;
+  for (let r = nRows - 1; r >= 0; r--) ry[r] = hidR[r] ? ry[r + 1] : body.rows[r].offsetTop;
   geo = {cx, ry};
 }
 function anchorPx(a){
@@ -1291,8 +1413,8 @@ function ensureSize(r, c){
   render();
   td(sel.r, sel.c).classList.add('sel');
 }
-function select(r, c){
-  r = Math.max(0, r); c = Math.max(0, c);
+function select(r, c, dr, dc){
+  r = visR(Math.max(0, r), dr); c = visC(Math.max(0, c), dc);
   ensureSize(r, c);
   const old = td(sel.r, sel.c);
   if (old) old.classList.remove('sel');
@@ -1313,6 +1435,7 @@ function select(r, c){
 }
 function extendTo(r, c){
   r = Math.max(0, r); c = Math.max(0, c);
+  r = visR(r, r < corner.r ? -1 : 1); c = visC(c, c < corner.c ? -1 : 1);
   ensureSize(r, c);
   corner = {r, c};
   scrollToCell(td(r, c));
@@ -1322,6 +1445,7 @@ function extendTo(r, c){
   $('#addr').value = isMulti() ? `${rg.e.r - rg.s.r + 1}R x ${rg.e.c - rg.s.c + 1}C` : enc(sel.r, sel.c);
 }
 function positionRangeBox(){
+  positionFillHandle();
   if (!isMulti()){ rangeBox.style.display = 'none'; return; }
   const rg = selRect();
   const x1 = geo.cx[rg.s.c], y1 = geo.ry[rg.s.r], x2 = geo.cx[Math.min(rg.e.c + 1, nCols)], y2 = geo.ry[Math.min(rg.e.r + 1, nRows)];
@@ -1372,6 +1496,7 @@ function startEdit(mode, text){
   editing = mode;
   if (text != null) editor.value = text;
   editor.classList.add('on');
+  positionFillHandle();
   placeEditor();
   focusGrid();
   const n = editor.value.length; editor.setSelectionRange(n, n);
@@ -1380,6 +1505,7 @@ function startEdit(mode, text){
 function cancelEdit(){
   editing = null; editor.value = ''; editor.classList.remove('on');
   barActive = false;
+  if (geo) positionFillHandle();
   if (wb && wb.Sheets[cur]) finput.value = editText(wb.Sheets[cur][enc(sel.r, sel.c)]);
 }
 function commitAll(){
@@ -1477,6 +1603,7 @@ function undo(){
   if (e.kind === 'cells') applyOps([...e.ops].reverse(), 'old');
   else if (e.kind === 'styles') applyStyleMap(e.sheet, e.prop, e.before);
   else if (e.kind === 'rename') renameSheet(e.to, e.from);
+  else if (e.kind === 'dims') applyDims(e, 'before');
   else restoreState(e.before);
 }
 function redo(){
@@ -1484,6 +1611,7 @@ function redo(){
   if (e.kind === 'cells') applyOps(e.ops, 'nu');
   else if (e.kind === 'styles') applyStyleMap(e.sheet, e.prop, e.after);
   else if (e.kind === 'rename') renameSheet(e.from, e.to);
+  else if (e.kind === 'dims') applyDims(e, 'after');
   else restoreState(e.after);
 }
 function recalcAll(){
@@ -1567,6 +1695,215 @@ function autoSum(){
   startEdit('edit', f);
   if (f === '=SUM()') editor.setSelectionRange(5, 5);
 }
+
+/* ---------- オートフィル（フィルハンドルのドラッグ） ---------- */
+// 連続データとして扱うリスト（Excel の既定のユーザー設定リストに相当）
+const FILL_LISTS = [
+  ['日', '月', '火', '水', '木', '金', '土'],
+  ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'],
+  ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+  ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+  ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+  ['第1四半期', '第2四半期', '第3四半期', '第4四半期'],
+  ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'],
+  ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'],
+];
+const FILL_LIST_IDX = new Map();
+FILL_LISTS.forEach((l, i) => l.forEach((s, j) => { if (!FILL_LIST_IDX.has(s)) FILL_LIST_IDX.set(s, [i, j]); }));
+const RE_NUMTEXT = /^(.*?)(\d+)(\D*)$/;
+const isDateCell = x => !!x.z && x.z !== 'General' && (() => { try { return XLSX.SSF.is_date(x.z); } catch { return false; } })();
+const tidy = v => Number(v.toPrecision(15));   // 0.1 刻みなどの浮動小数点誤差を丸める
+// セルの種類を判定。同じ key が連続する元セルを 1 つの系列として増分を求める
+function fillKind(x){
+  if (!x || x.v == null || x.v === '') return {key:null};
+  if (x.f) return {key:null};
+  if (x.t === 'n') return isDateCell(x) ? {key:'D', v:x.v} : {key:'N', v:x.v};
+  if (x.t === 's' && typeof x.v === 'string'){
+    const li = FILL_LIST_IDX.get(x.v);
+    if (li) return {key:'L' + li[0], v:li[1], list:li[0]};
+    const m = RE_NUMTEXT.exec(x.v);
+    if (m) return {key:'T' + m[1] + '\u0000' + m[3], v:+m[2], pre:m[1], suf:m[3], w:m[2].length};
+  }
+  return {key:null};
+}
+// 最小二乗法で一次式を当てはめる（Excel の連続データと同じ考え方）
+function linFit(vals){
+  const m = vals.length;
+  if (m === 1) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  vals.forEach((y, x) => { sx += x; sy += y; sxx += x * x; sxy += x * y; });
+  const b = (m * sxy - sx * sy) / (m * sxx - sx * sx), a = (sy - b * sx) / m;
+  return x => a + b * x;
+}
+// 日付の系列：日が同じで月が一定間隔なら月単位、それ以外は日数の一次式
+function dateFit(vals){
+  if (vals.length === 1) return x => vals[0] + x;
+  const ds = vals.map(v => ymd(v));
+  if (vals.every(v => Number.isInteger(v)) && ds.every(d => d.d === ds[0].d)){
+    const ms = ds.map(d => d.y * 12 + d.m - 1), step = ms[1] - ms[0];
+    if (step && ms.every((m, i) => i === 0 || m - ms[i - 1] === step)){
+      const day = ds[0].d;
+      return x => { const mi = ms[0] + step * x, y = Math.floor(mi / 12), mo = mi - y * 12 + 1;
+        return serial(y, mo, Math.min(day, new Date(Date.UTC(y, mo, 0)).getUTCDate())); };
+    }
+  }
+  return linFit(vals);
+}
+// srcs: フィル方向の順に並べた元セル（上・左へのフィルでは逆順）。count 個の値を作る
+// 戻り値の各要素は {cell, j}（j は元にした srcs の添字。数式の参照をずらすのに使う）
+function fillSeries(srcs, count){
+  const n = srcs.length, kinds = srcs.map(fillKind);
+  // 同じ key が連続する範囲をグループにまとめ、グループごとに当てはめ関数を作る
+  const grp = new Array(n);
+  for (let j = 0; j < n;){
+    let k = j; while (k + 1 < n && kinds[k + 1].key && kinds[k + 1].key === kinds[j].key) k++;
+    const g = {start:j, m:k - j + 1, kind:kinds[j]};
+    const vals = kinds.slice(j, k + 1).map(t => t.v);
+    if (g.kind.key === 'D') g.fn = dateFit(vals);
+    else if (g.kind.key){
+      // 数値 1 つだけを単独でフィルした場合は Excel と同じくコピー
+      if (g.kind.key === 'N' && n === 1) g.kind = {key:null};
+      else g.fn = linFit(vals) || (x => vals[0] + x);
+    }
+    for (let t = j; t <= k; t++) grp[t] = g;
+    j = k + 1;
+  }
+  const out = [];
+  for (let i = 0; i < count; i++){
+    const j = i % n, q = Math.floor(i / n) + 1, g = grp[j], src = srcs[j];
+    if (!g.kind.key){ out.push({cell:src, j, copy:true}); continue; }
+    const v = g.fn(j - g.start + q * g.m), k = g.kind, c = {...src};
+    delete c.w; delete c.r; delete c.h;
+    if (k.key === 'N' || k.key === 'D') c.v = tidy(v);
+    else if (k.list != null){ const L = FILL_LISTS[k.list]; c.v = L[((Math.round(v) % L.length) + L.length) % L.length]; }
+    else c.v = k.pre + String(Math.abs(Math.round(v))).padStart(k.w, '0') + k.suf;
+    out.push({cell:c, j});
+  }
+  return out;
+}
+// src: 元の範囲, dir: 'down' | 'up' | 'right' | 'left', count: 増やすセル数（負なら範囲を縮めて消去）
+function autoFill(src, dir, count){
+  commitAll();
+  if (!count) return;
+  const ws = wb.Sheets[cur], list = [], vert = dir === 'down' || dir === 'up';
+  const u = {s:{...src.s}, e:{...src.e}};
+  if (count < 0){
+    // 範囲の内側へドラッグ：はみ出した部分を消去（Excel と同じ）
+    const k = -count;
+    const rg = vert ? {s:{r:src.e.r - k + 1, c:src.s.c}, e:{...src.e}} : {s:{r:src.s.r, c:src.e.c - k + 1}, e:{...src.e}};
+    cellsIn(rg, (r, c) => list.push({r, c, cell:null}));
+    if (vert) u.e.r -= k; else u.e.c -= k;
+  } else {
+    const lines = vert ? [src.s.c, src.e.c] : [src.s.r, src.e.r];
+    const len = vert ? src.e.r - src.s.r + 1 : src.e.c - src.s.c + 1;
+    const fwd = dir === 'down' || dir === 'right';
+    for (let L = lines[0]; L <= lines[1]; L++){
+      // 元セルをフィル方向の順に並べる
+      const pos = [];
+      for (let t = 0; t < len; t++) pos.push(fwd ? t : len - 1 - t);
+      const at = t => vert ? [src.s.r + t, L] : [L, src.s.c + t];
+      const srcs = pos.map(t => { const [r, c] = at(t); return ws[enc(r, c)] || null; });
+      fillSeries(srcs, count).forEach((o, i) => {
+        const [sr, sc] = at(pos[o.j]);
+        const step = fwd ? len + i : -(i + 1);
+        const [r, c] = at(step);
+        const cell = o.copy ? moveCell(o.cell, r - sr, c - sc) : o.cell;
+        list.push({r, c, cell});
+      });
+    }
+    if (dir === 'down') u.e.r += count; else if (dir === 'up') u.s.r -= count;
+    else if (dir === 'right') u.e.c += count; else u.s.c -= count;
+  }
+  if (list.length) setCells(list);
+  select(u.s.r, u.s.c);
+  if (u.e.r !== u.s.r || u.e.c !== u.s.c) extendTo(u.e.r, u.e.c);
+}
+const fillHandle = $('#fillHandle'), fillBox = $('#fillBox');
+function positionFillHandle(){
+  if (!geo || editing || !wb){ fillHandle.style.display = 'none'; return; }
+  const rg = selRect();
+  const x = geo.cx[Math.min(rg.e.c + 1, nCols)], y = geo.ry[Math.min(rg.e.r + 1, nRows)];
+  fillHandle.style.cssText = `display:block;left:${x}px;top:${y}px`;
+}
+// ドラッグ位置からフィル先を決める（縦横のうち、元の範囲から遠く離れた方向へ）
+function fillTarget(src, r, c){
+  const dDown = r - src.e.r, dUp = src.s.r - r, dRight = c - src.e.c, dLeft = src.s.c - c;
+  const v = Math.max(dDown, dUp, 0), h = Math.max(dRight, dLeft, 0);
+  if (v === 0 && h === 0){
+    // 範囲の内側：縮める（消去）方向。下端・右端からの距離が大きい方
+    const ur = src.e.r - r, uc = src.e.c - c;
+    if (ur <= 0 && uc <= 0) return null;
+    return ur >= uc ? {dir:'down', count:-ur} : {dir:'right', count:-uc};
+  }
+  if (v >= h) return dDown > 0 ? {dir:'down', count:dDown} : {dir:'up', count:Math.min(dUp, src.s.r)};
+  return dRight > 0 ? {dir:'right', count:dRight} : {dir:'left', count:Math.min(dLeft, src.s.c)};
+}
+function showFillBox(src, t){
+  if (!t || !t.count){ fillBox.style.display = 'none'; return; }
+  const u = {s:{...src.s}, e:{...src.e}};
+  if (t.count < 0){ if (t.dir === 'down') u.e.r += t.count; else u.e.c += t.count; }
+  else if (t.dir === 'down') u.e.r += t.count; else if (t.dir === 'up') u.s.r -= t.count;
+  else if (t.dir === 'right') u.e.c += t.count; else u.s.c -= t.count;
+  if (u.e.r < u.s.r || u.e.c < u.s.c){ fillBox.style.display = 'none'; return; }
+  ensureSize(u.e.r + 1, u.e.c + 1);
+  const x1 = geo.cx[u.s.c], y1 = geo.ry[u.s.r], x2 = geo.cx[Math.min(u.e.c + 1, nCols)], y2 = geo.ry[Math.min(u.e.r + 1, nRows)];
+  fillBox.style.cssText = `display:block;left:${x1}px;top:${y1}px;width:${x2 - x1}px;height:${y2 - y1}px`;
+}
+let fillDrag = null;
+function fillDragUpdate(){
+  if (!fillDrag) return;
+  const b = wrap.getBoundingClientRect(), {x, y} = fillDrag;
+  // 端に近づいたら自動スクロール
+  const sp = 24;
+  if (y > b.bottom - sp) wrap.scrollTop += Math.min(40, y - (b.bottom - sp));
+  else if (y < b.top + grid.tHead.offsetHeight + sp) wrap.scrollTop -= Math.min(40, b.top + grid.tHead.offsetHeight + sp - y);
+  if (x > b.right - sp) wrap.scrollLeft += Math.min(40, x - (b.right - sp));
+  else if (x < b.left + 48 + sp) wrap.scrollLeft -= Math.min(40, b.left + 48 + sp - x);
+  const a = pxToAnchor(x - b.left + wrap.scrollLeft - wrap.clientLeft, y - b.top + wrap.scrollTop - wrap.clientTop);
+  fillDrag.target = fillTarget(fillDrag.src, a.r, a.c);
+  showFillBox(fillDrag.src, fillDrag.target);
+  fillDrag.raf = requestAnimationFrame(fillDragUpdate);
+}
+function endFillDrag(apply){
+  if (!fillDrag) return;
+  cancelAnimationFrame(fillDrag.raf);
+  const {src, target} = fillDrag;
+  fillDrag = null; fillBox.style.display = 'none';
+  if (apply && target) autoFill(src, target.dir, target.count);
+  focusGrid();
+}
+fillHandle.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  commitAll(); selectObj(null); hideMenu();
+  fillHandle.setPointerCapture(e.pointerId);
+  fillDrag = {src:selRect(), x:e.clientX, y:e.clientY, target:null};
+  fillDrag.raf = requestAnimationFrame(fillDragUpdate);
+});
+fillHandle.addEventListener('pointermove', e => { if (fillDrag){ fillDrag.x = e.clientX; fillDrag.y = e.clientY; } });
+fillHandle.addEventListener('pointerup', () => endFillDrag(true));
+fillHandle.addEventListener('pointercancel', () => endFillDrag(false));
+fillHandle.addEventListener('mousedown', e => e.stopPropagation());
+window.addEventListener('keydown', e => { if (fillDrag && e.key === 'Escape'){ e.preventDefault(); endFillDrag(false); } }, true);
+// ダブルクリック：隣の列のデータが続く行まで下へフィル
+fillHandle.addEventListener('dblclick', e => {
+  e.preventDefault(); e.stopPropagation();
+  const src = selRect(), ws = wb.Sheets[cur];
+  const has = (r, c) => { const x = c >= 0 && ws[enc(r, c)]; return !!x && x.v != null && x.v !== ''; };
+  // 左隣、右隣の順に、選択範囲の最終行から横に続くデータの列を探し、その中で下にデータが続く列を使う
+  const cand = [];
+  for (let c = src.s.c - 1; c >= 0 && (c === src.s.c - 1 || has(src.e.r, c)); c--) cand.push(c);
+  for (let c = src.e.c + 1; c <= src.e.c + 50 && (c === src.e.c + 1 || has(src.e.r, c)); c++) cand.push(c);
+  let last = src.e.r;
+  for (const c of cand){
+    if (!has(src.e.r + 1, c)) continue;
+    while (has(last + 1, c)) last++;
+    break;
+  }
+  if (last > src.e.r) autoFill(src, 'down', last - src.e.r);
+});
 
 /* ---------- 罫線・セルの色 ---------- */
 // ws['!borders'] = {A1: {left, right, top, bottom}}。各辺は {style, color}（color は styles.xml の <color> の属性。省略時は自動）
@@ -2161,6 +2498,7 @@ grid.addEventListener('contextmenu', e => {
     else if (r >= 0 && c >= 0) select(r, c);
   }
   const g = selRect(), nr = g.e.r - g.s.r + 1, nc = g.e.c - g.s.c + 1;
+  const ws = wb.Sheets[cur];
   const rowItems = [
     {label:`上に ${nr} 行挿入`, fn:() => structOp('r', g.s.r, nr)},
     {label:`${nr} 行削除`, fn:() => structOp('r', g.s.r, -nr)},
@@ -2169,7 +2507,17 @@ grid.addEventListener('contextmenu', e => {
     {label:`左に ${nc} 列挿入`, fn:() => structOp('c', g.s.c, nc)},
     {label:`${nc} 列削除`, fn:() => structOp('c', g.s.c, -nc)},
   ];
-  const items = inHead && c >= 0 ? colItems : (!inHead && c < 0 ? rowItems : [...rowItems, ...colItems]);
+  const rowHide = [
+    {label:`${nr} 行を非表示（Ctrl+9）`, fn:() => setHidden('r', g.s.r, g.e.r, true)},
+    {label:'行の再表示（Ctrl+Shift+9）', fn:() => setHidden('r', g.s.r, g.e.r, false), disabled:!anyHidden(ws, 'r', g.s.r, g.e.r)},
+  ];
+  const colHide = [
+    {label:`${nc} 列を非表示（Ctrl+0）`, fn:() => setHidden('c', g.s.c, g.e.c, true)},
+    {label:'列の再表示（Ctrl+Shift+0）', fn:() => setHidden('c', g.s.c, g.e.c, false), disabled:!anyHidden(ws, 'c', g.s.c, g.e.c)},
+  ];
+  const all = sheetHasHidden(ws) ? [{label:'すべての行・列を再表示', fn:unhideAll}] : [];
+  const items = inHead && c >= 0 ? [...colItems, '-', ...colHide, ...all]
+    : (!inHead && c < 0 ? [...rowItems, '-', ...rowHide, ...all] : [...rowItems, ...colItems, '-', ...rowHide, ...colHide, ...all]);
   showMenu(e.clientX, e.clientY, [
     {label:'セルを編集', fn:() => startEdit('edit', editText(wb.Sheets[cur][enc(sel.r, sel.c)]))},
     {label:'コピー', fn:menuCopy},
@@ -2207,7 +2555,7 @@ function updateTitle(){
 }
 
 /* ---------- キーボード・マウス ---------- */
-function move(dr, dc){ select(sel.r + dr, sel.c + dc); }
+function move(dr, dc){ select(sel.r + dr, sel.c + dc, dr < 0 ? -1 : 1, dc < 0 ? -1 : 1); }
 editor.addEventListener('keydown', e => {
   if (e.isComposing || e.keyCode === 229) return;
   const k = e.key, ctrl = e.ctrlKey || e.metaKey;
@@ -2235,6 +2583,12 @@ editor.addEventListener('keydown', e => {
     else if (kl === 'r'){ e.preventDefault(); fill('right'); }
     else if (kl === 'a'){ e.preventDefault(); const rg = sheetRange(cur); select(0, 0); extendTo(rg.e.r, rg.e.c); }
     else if (k === 'Home'){ e.preventDefault(); select(0, 0); }
+    // Ctrl+9 / Ctrl+0：行・列を非表示、Shift 付きで再表示（キー配列によらず物理キーで判定）
+    else if (e.code === 'Digit9' || e.code === 'Digit0'){
+      e.preventDefault();
+      const g = selRect(), ax = e.code === 'Digit9' ? 'r' : 'c';
+      setHidden(ax, ax === 'r' ? g.s.r : g.s.c, ax === 'r' ? g.e.r : g.e.c, !e.shiftKey);
+    }
     else if (k.startsWith('Arrow')){ e.preventDefault(); jump(k, e.shiftKey); }
     return;
   }
